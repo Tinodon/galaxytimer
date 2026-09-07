@@ -8,6 +8,11 @@
 // Second usage : Render endort un service gratuit apres 15 minutes sans
 // requete. Un pinger externe (UptimeRobot, cron-job.org) appelle cette URL
 // regulierement pour le garder eveille. Un bot endormi ne ping personne.
+//
+// IMPORTANT : ce serveur doit demarrer AVANT la connexion a Discord, pas apres.
+// Render considere un deploiement reussi quand un port est ouvert ; si on
+// attend d'etre connecte, le moindre souci de connexion laisse le deploiement
+// bloque sur "Deploying..." sans le moindre message d'erreur.
 
 import { createServer } from 'node:http';
 

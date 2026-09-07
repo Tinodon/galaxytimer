@@ -21,6 +21,7 @@ rmSync(DB, { force: true });
 const store = await import('../src/store.js');
 const { fileBackend, upstashBackend } = await import('../src/backends.js');
 const { createServer } = await import('node:http');
+const { spawn } = await import('node:child_process');
 const { tick } = await import('../src/scheduler.js');
 const { ITEMS, slugify, timerLabel } = await import('../src/items.js');
 const { armTimer, definitions } = await import('../src/commands.js');
@@ -575,6 +576,60 @@ console.log('17. Choix du backend selon l environnement');
   Object.assign(process.env, before);
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
+}
+
+console.log('');
+console.log('18. Le port HTTP s ouvre AVANT la connexion a Discord');
+{
+  // Regression : le serveur ne demarrait qu une fois connecte a Discord, donc
+  // aucun port n etait ouvert tant que la connexion n aboutissait pas, et
+  // l hebergeur restait bloque sur "Deploying..." sans message d erreur.
+  const port = 39117;
+  const probeDb = join(ROOT, 'data', 'probe.test.json');
+  rmSync(probeDb, { force: true });
+  rmSync(`${probeDb}.lock`, { force: true });
+
+  const child = spawn(process.execPath, [join(ROOT, 'src', 'index.js')], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DISCORD_TOKEN: 'volontairement.invalide.pour.le.test',
+      GALAXYTIMER_DB: probeDb,
+      UPSTASH_REDIS_REST_URL: '',
+      UPSTASH_REDIS_REST_TOKEN: '',
+    },
+    stdio: 'ignore',
+  });
+
+  const poll = async (until) => {
+    for (let i = 0; i < 60; i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/health`);
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (until(json)) return json;
+      } catch {
+        // Pas encore en ecoute.
+      }
+    }
+    return null;
+  };
+
+  // Le port doit repondre bien avant que la connexion Discord n aboutisse ou
+  // n echoue : c est tout l interet de la correction.
+  const early = await poll(() => true);
+  check('le port repond sans attendre la connexion Discord', () => assert.ok(early));
+  check('et annonce qu il demarre', () => assert.equal(early.status, 'starting'));
+
+  const failed = await poll((j) => j.status !== 'starting');
+  check('/health finit par expliquer pourquoi', () => assert.equal(failed?.status, 'login_failed'));
+  check('et donne l erreur exacte', () => assert.match(failed.error, /token/i));
+
+  child.kill();
+  await new Promise((r) => setTimeout(r, 300));
+  rmSync(probeDb, { force: true });
+  rmSync(`${probeDb}.lock`, { force: true });
 }
 
 rmSync(DB, { force: true });

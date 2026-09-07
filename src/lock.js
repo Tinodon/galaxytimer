@@ -6,11 +6,16 @@
 // on refuse de demarrer au lieu de laisser la situation se produire.
 
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const LOCK = join(ROOT, 'data', 'bot.lock');
+
+// Le verrou suit la base de donnees : deux instances pointant sur des bases
+// differentes ne se marchent pas dessus, et un test ne bloque pas le bot reel.
+const LOCK = process.env.GALAXYTIMER_DB
+  ? `${resolve(process.env.GALAXYTIMER_DB)}.lock`
+  : join(ROOT, 'data', 'bot.lock');
 
 /** `kill(pid, 0)` ne tue rien : il teste seulement si le process existe. */
 function isAlive(pid) {

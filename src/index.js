@@ -11,6 +11,10 @@ import { startHealthServer } from './health.js';
 import { registerGlobally, clearGuildCommands } from './register.js';
 import { handleButton } from './buttons.js';
 
+// Toute premiere ligne du journal : sans elle, un demarrage qui echoue tot ne
+// laisse aucune trace et l'hebergeur affiche des logs vides.
+console.log(`[bot] starting — node ${process.version}, port ${process.env.PORT ?? 'none (local)'}`);
+
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
   console.error('Missing DISCORD_TOKEN. Copy .env.example to .env and fill it in.');
@@ -23,6 +27,26 @@ lock.acquire();
 // Aucun intent privilegie : le bot ne lit pas les messages, il repond a des
 // interactions. Rien a activer dans le portail developpeur.
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+// Etat publie par /health. Renseigne des que le bot est pret ; avant ca, le
+// serveur repond quand meme "starting", ce qui suffit a l'hebergeur.
+let ready = null;
+let loginError = null;
+
+// Le port s'ouvre AVANT la connexion a Discord : Render valide un deploiement
+// sur l'ouverture d'un port, et resterait bloque a "Deploying..." si on
+// attendait d'etre connecte. PORT est defini par l'hebergeur, absent en local.
+startHealthServer({
+  port: process.env.PORT,
+  status: () => ({
+    status: ready ? 'ok' : loginError ? 'login_failed' : 'starting',
+    error: loginError,
+    bot: ready?.tag ?? null,
+    guilds: ready?.guilds ?? 0,
+    activeTimers: ready ? store.all().length : 0,
+    uptimeSeconds: Math.round(process.uptime()),
+  }),
+});
 
 client.once(Events.ClientReady, async (c) => {
   await store.init();
@@ -39,18 +63,9 @@ client.once(Events.ClientReady, async (c) => {
   const active = store.all().length;
   console.log(`[bot] logged in as ${c.user.tag} — ${active} timer(s) restored`);
   scheduler.start(client);
+  ready = { tag: c.user.tag, guilds: c.guilds.cache.size };
 
-  // Uniquement pour l'hebergeur : PORT est defini par Render, absent en local.
-  startHealthServer({
-    port: process.env.PORT,
-    status: () => ({
-      status: 'ok',
-      bot: c.user.tag,
-      guilds: c.guilds.cache.size,
-      activeTimers: store.all().length,
-      uptimeSeconds: Math.round(process.uptime()),
-    }),
-  });
+
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -80,4 +95,11 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 
-client.login(token);
+// Une connexion ratee ne doit pas tuer le process : on garde le serveur HTTP
+// debout pour que l'hebergeur affiche le service et que /health dise pourquoi,
+// au lieu d'une boucle de redemarrage muette.
+client.login(token).catch((err) => {
+  loginError = err.message;
+  console.error(`[bot] Discord login failed: ${err.message}`);
+  console.error('[bot] check DISCORD_TOKEN. The HTTP server stays up so /health can report it.');
+});
