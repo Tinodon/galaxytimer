@@ -208,8 +208,49 @@ Le scheduler balaie la liste toutes les 10 secondes.
 Les tests ecrivent dans `data/timers.test.json` via `GALAXYTIMER_DB`, jamais
 dans `data/timers.json`.
 
+## Heberger sur Render
+
+Le bot ne ping que si son processus tourne. Sur un PC qui s'eteint la nuit, un
+timer de 35h ne pingera qu'au reveil de la machine. Render le fait tourner
+24h/24, gratuitement.
+
+### Deux particularites de l'offre gratuite
+
+1. **Pas de "background worker"** (payant). Le bot tourne en *web service*, et
+   un web service qui n'ecoute aucun port est considere comme rate au
+   deploiement. D'ou `src/health.js`, qui n'existe que pour ca.
+2. **Le disque est ephemere** : efface a chaque redeploiement et a chaque
+   redemarrage. `data/timers.json` n'y survivrait pas, donc un timer Helmet de
+   35h non plus. Il faut une base externe — d'ou le backend Upstash.
+
+Render endort aussi un service gratuit apres 15 minutes sans requete. Un
+pinger externe (UptimeRobot, cron-job.org) appelant l'URL du service toutes les
+10 minutes le garde eveille.
+
+### Marche a suivre
+
+1. **Base Upstash** — https://console.upstash.com, *Create Database*, offre
+   gratuite. Onglet **REST API** : copier `UPSTASH_REDIS_REST_URL` et
+   `UPSTASH_REDIS_REST_TOKEN`.
+2. **Depot GitHub** — creer un depot vide, puis :
+   ```
+   git remote add origin https://github.com/<toi>/galaxytimer.git
+   git push -u origin main
+   ```
+3. **Service Render** — *New > Blueprint*, pointer sur le depot. `render.yaml`
+   decrit deja le service ; Render demandera les 4 variables secretes.
+4. **Pinger** — creer un moniteur HTTP sur `https://<ton-service>.onrender.com/`
+   toutes les 10 minutes.
+
+`/health` renvoie l'etat du bot en JSON (serveurs, timers actifs, uptime).
+
+### A ne pas oublier
+
+**Arreter le bot local une fois Render en ligne.** Deux instances avec le meme
+token repondent toutes les deux a chaque interaction : doublons de pings et
+erreurs "Unknown interaction". Le verrou de `src/lock.js` protege contre deux
+processus sur la MEME machine, pas contre une machine plus un hebergeur.
+
 ## Limite connue
 
-Le bot ne ping que si le processus tourne. Sur un PC qui dort, un timer de 35h
-lance a 23h ne pingera qu'au reveil de la machine (avec la mention du retard).
-Pour du 24/7 fiable, le deplacer sur un VPS.
+Sans hebergement, le bot ne ping que quand le processus tourne.

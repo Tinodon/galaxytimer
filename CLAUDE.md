@@ -118,6 +118,21 @@ Contraintes a respecter si on touche a ce format :
 - `store.migrateKeys` convertit l'ancien format a 3 segments. Ne pas le
   supprimer sans verifier qu'aucune base en production ne l'utilise encore.
 
+## Hebergement
+
+Le bot vise l'offre gratuite de Render : web service (pas de worker gratuit),
+disque ephemere. Deux consequences a ne jamais casser :
+
+- `src/health.js` ouvre un port des que `PORT` est defini. Sans port ecoute,
+  Render considere le deploiement rate.
+- **Rien d'important ne doit dependre du disque.** `src/store.js` choisit son
+  backend selon l'environnement (`src/backends.js`) : fichier en local, Upstash
+  des que ses deux variables sont la. Toute nouvelle donnee a conserver passe
+  par le store, jamais par un `writeFileSync` direct.
+
+Les ecritures distantes ne sont volontairement pas attendues : une interaction
+Discord doit repondre en moins de 3 secondes.
+
 ## Tests
 
 `npm test` (`test/smoke.mjs`) simule le client Discord -- aucun token requis.
