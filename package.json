@@ -1,0 +1,26 @@
+{
+  "name": "galaxytimer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bot Discord de timers pour Galaxy Life",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "deploy": "node src/deploy-commands.js",
+    "deploy:global": "node src/deploy-commands.js --global",
+    "test": "node test/smoke.mjs",
+    "preview": "node scripts/preview.mjs",
+    "describe": "node scripts/describe.mjs",
+    "whereami": "node scripts/whereami.mjs",
+    "emojis": "node scripts/emojis.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

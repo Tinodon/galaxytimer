@@ -1,0 +1,31 @@
+# Blueprint Render. Render lit ce fichier a la creation du service.
+#
+# Le bot tourne en "web service" et non en "background worker" : l'offre
+# gratuite de Render ne propose pas de worker. C'est aussi pour ca que le bot
+# ouvre un port HTTP (src/health.js) — un web service qui n'ecoute rien est
+# considere comme rate au deploiement.
+
+services:
+  - type: web
+    name: galaxytimer
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # sync: false = a saisir dans le tableau de bord Render, jamais dans ce
+      # fichier : il part sur GitHub.
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      # Sans ces deux la, le bot ecrit sur le disque de Render, qui est efface a
+      # chaque redeploiement : les timers en cours seraient perdus.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: NODE_VERSION
+        value: "22"
