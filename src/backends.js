@@ -63,10 +63,14 @@ export function fileBackend(path) {
 export function upstashBackend({ url, token, key = 'galaxytimer:timers' }) {
   let cache = {};
 
-  const auth = { Authorization: `Bearer ${token}` };
+  // Les valeurs viennent d'un copier-coller dans une interface web : on tolere
+  // les espaces, les guillemets et la barre oblique finale plutot que d'echouer
+  // sur une authentification incomprehensible.
+  const base = String(url).trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+  const auth = { Authorization: `Bearer ${String(token).trim().replace(/^["']|["']$/g, '')}` };
 
   const get = async () => {
-    const response = await fetch(`${url}/get/${encodeURIComponent(key)}`, { headers: auth });
+    const response = await fetch(`${base}/get/${encodeURIComponent(key)}`, { headers: auth });
     if (!response.ok) throw new Error(`Upstash GET ${response.status}: ${await response.text()}`);
     return (await response.json()).result;
   };
@@ -74,7 +78,7 @@ export function upstashBackend({ url, token, key = 'galaxytimer:timers' }) {
   // La valeur passe dans le CORPS de la requete, pas dans l'URL : un blob JSON
   // de plusieurs kilo-octets depasserait la longueur d'URL admissible.
   const set = async (payload) => {
-    const response = await fetch(`${url}/set/${encodeURIComponent(key)}`, {
+    const response = await fetch(`${base}/set/${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: { ...auth, 'Content-Type': 'text/plain' },
       body: payload,

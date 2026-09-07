@@ -533,6 +533,20 @@ console.log('16. Backend distant (Upstash) pour l hebergement');
   check('un redemarrage relit la base distante', () =>
     assert.equal(reopened.read()['g:u:helmet:'].itemId, 'helmet'));
 
+  // Valeurs telles qu'un copier-coller maladroit les produit.
+  for (const [label, dirty] of [
+    ['barre oblique finale', `${url}/`],
+    ['espaces autour', `  ${url}  `],
+    ['guillemets', `"${url}"`],
+  ]) {
+    const b = upstashBackend({ url: dirty, token: ' tok ', key: 'gt:test' });
+    await b.init();
+    check(`URL avec ${label} : fonctionne quand meme`, () =>
+      assert.equal(b.read()['g:u:helmet:'].itemId, 'helmet'));
+  }
+  check('token entoure d espaces : Bearer propre', () =>
+    assert.equal(seen[seen.length - 1].auth, 'Bearer tok'));
+
   stored = 'ceci n est pas du JSON';
   const broken = upstashBackend({ url, token: 'tok', key: 'gt:test' });
   await broken.init();
