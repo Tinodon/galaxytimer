@@ -30,6 +30,8 @@ const { timerButtons, panelRows, startedText, panelText, readyText, itemImage, c
 const { buildPanel } = await import('../src/commands.js');
 const { helpText, descriptionText, MAX_DESCRIPTION } = await import('../src/help.js');
 const { loadLibrary, loadEmojiArtwork, resolveArtwork, normalize } = await import('../src/artwork.js');
+const intel = await import('../src/intel.js');
+const { playerReport, allianceReport, fit } = await import('../src/intelview.js');
 const { artworkFor } = await import('../src/ui.js');
 const { startedMessage } = await import('../src/commands.js');
 
@@ -324,7 +326,10 @@ store.all().forEach((t) => store.remove(t.key));
 console.log('\n10. Les commandes correspondent au registre');
 const names = definitions.map((c) => c.name);
 check('une commande par item, plus /timers', () =>
-  assert.deepEqual(names, ['helmet', 'toolcase', 'starbattery', 'wars', 'upgrade', 'timers', 'glhelp']));
+  assert.deepEqual(names, [
+    'helmet', 'toolcase', 'starbattery', 'wars', 'upgrade',
+    'timers', 'scout', 'alliance', 'watchlist', 'glhelp',
+  ]));
 const byName = Object.fromEntries(definitions.map((c) => [c.name, c]));
 check('/helmet n a aucune option', () => assert.equal((byName.helmet.options ?? []).length, 0));
 check('/wars a un player optionnel', () => {
@@ -632,6 +637,67 @@ console.log('18. Le port HTTP s ouvre AVANT la connexion a Discord');
   rmSync(`${probeDb}.lock`, { force: true });
 }
 
+console.log('');
+console.log('19. Renseignement : detection des changements');
+await intel.init();
+{
+  const user = (level, hq, alliance = 'folk valley') => ({
+    Id: '306407', Name: 'IRaXeRI', Level: level, Experience: 1,
+    AllianceId: alliance, Planets: hq.map((h) => ({ OwnerId: '306407', HQLevel: h })),
+  });
+  const stats = (taken, done) => ({ TimesAttacked: taken, PlayersAttacked: done, StarbasesDestroyed: 230 });
+
+  const before = intel.playerSnapshot(user(294, [9,7,7,7,6,6,6,6,5,5,5]), stats(1142, 300));
+  check('un releve enregistre le premier passage', () => assert.equal(intel.recordPlayer('306407', before), true));
+  check('un releve identique n est PAS re-enregistre', () =>
+    assert.equal(intel.recordPlayer('306407', intel.playerSnapshot(user(294, [9,7,7,7,6,6,6,6,5,5,5]), stats(1142, 300))), false));
+  check('l historique ne contient qu une entree', () => assert.equal(intel.playerHistory('306407').length, 1));
+
+  const now = user(297, [9,7,7,7,7,6,6,6,6,5,5,5], 'studenci debile');
+  const report = playerReport(now, stats(1183, 315), intel.playerHistory('306407'));
+  check('detecte la montee de niveau', () => assert.match(report, /level [\+]3/));
+  check('detecte la colonie gagnee', () => assert.match(report, /gained 1 planet\(s\�?\), — HQ 7|gained 1 planet/));
+  check('detecte le changement d alliance', () => assert.match(report, /folk valley → studenci debile/));
+  check('detecte les attaques subies', () => assert.match(report, /attacked [\+]41 times/));
+  check('ne signale pas de perte de colonie', () => assert.ok(!/lost/.test(report)));
+
+  // Piege : l API ne garantit aucun ordre des planetes. Comparer index par
+  // index inventerait des changements a chaque releve.
+  const shuffled = user(294, [5,7,9,6,7,5,6,7,6,5,6]);
+  const same = playerReport(shuffled, stats(1142, 300), intel.playerHistory('306407'));
+  check('un ordre de planetes different n invente pas de changement', () =>
+    assert.ok(!/gained|lost/.test(same)));
+
+  const shrunk = user(294, [9,7,7,6,6,6,6,5,5,5]);
+  const loss = playerReport(shrunk, stats(1142, 300), intel.playerHistory('306407'));
+  check('detecte une colonie perdue', () => assert.match(loss, /lost 1 planet/));
+
+  check('sans historique, le rapport le dit', () =>
+    assert.match(playerReport(now, null, []), /No history yet/));
+
+  // Alliance
+  const ally = (wp, members, inWar = true) => ({
+    Id: 'folk valley', Name: 'Folk Valley', AllianceLevel: 38, WarPoints: wp,
+    WarsWon: 7, WarsLost: 0, InWar: inWar, OpponentAllianceId: 'studenci debile',
+    Members: members.map((n) => ({ Id: n, Name: 'P' + n, Level: 100 })),
+  });
+  intel.recordAlliance('folk valley', intel.allianceSnapshot(ally(400000, ['1','2','3'])));
+  const ar = allianceReport(ally(435351, ['1','3','4']), intel.allianceHistory('folk valley'));
+  check('detecte les warpoints gagnes', () => assert.match(ar, /war points [\+]35,351/));
+  check('detecte une arrivee', () => assert.match(ar, /joined: P4/));
+  check('detecte un depart', () => assert.match(ar, /left: P2/));
+  const peace = allianceReport(ally(435351, ['1','3','4'], false), intel.allianceHistory('folk valley'));
+  check('detecte la fin de guerre', () => assert.match(peace, /war ended/));
+
+  // Liste de surveillance
+  intel.watch(GUILD, 'player', '306407', 'IRaXeRI');
+  check('la surveillance retient le joueur', () =>
+    assert.equal(intel.watchList(GUILD).players[0].label, 'IRaXeRI'));
+  check('surveiller deux fois ne duplique pas', () => assert.equal(intel.watch(GUILD, 'player', '306407', 'IRaXeRI'), false));
+  check('un rapport tient dans un message Discord', () => assert.ok(fit('x'.repeat(5000)).length <= 1990));
+}
+
 rmSync(DB, { force: true });
+rmSync(DB.replace(/\.json$/, '.intel.json'), { force: true });
 rmSync(ART_ROOT, { recursive: true, force: true });
 console.log(`\n${passed}/${passed} assertions passees.\n`);

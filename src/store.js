@@ -23,14 +23,16 @@ let backend = null;
  * Choisit le backend. Upstash des que ses deux variables sont presentes,
  * fichier sinon — aucune configuration n'est requise en local.
  */
-export function selectBackend() {
+export function selectBackend(name = 'timers') {
   const { UPSTASH_REDIS_REST_URL: url, UPSTASH_REDIS_REST_TOKEN: token } = process.env;
-  if (url && token) return upstashBackend({ url, token });
+  if (url && token) return upstashBackend({ url, token, key: `galaxytimer:${name}` });
 
-  const path = process.env.GALAXYTIMER_DB
+  // GALAXYTIMER_DB nomme le fichier des timers ; les autres espaces vivent a
+  // cote, pour qu'un test isole tout d'un coup.
+  const base = process.env.GALAXYTIMER_DB
     ? resolve(process.env.GALAXYTIMER_DB)
     : join(ROOT, 'data', 'timers.json');
-  return fileBackend(path);
+  return fileBackend(name === 'timers' ? base : base.replace(/\.json$/, `.${name}.json`));
 }
 
 /**

@@ -13,6 +13,9 @@ import { ITEMS, ITEM_LIST, slugify, timerLabel } from './items.js';
 import { parseDuration } from './duration.js';
 import { startedText, panelText, panelRows, timerButtons, artworkFor } from './ui.js';
 import { helpText } from './help.js';
+import * as api from './glapi.js';
+import * as intel from './intel.js';
+import { playerReport, allianceReport, fit } from './intelview.js';
 
 // Le message nomme son proprietaire mais ne doit pinger personne : seul le ping
 // de fin de timer a le droit de notifier.
@@ -54,6 +57,25 @@ export const definitions = [
     .setName('timers')
     .setDescription('Your active timers, with their Stop buttons')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('scout')
+    .setDescription('Intel on a player, and start tracking what changes')
+    .addStringOption((o) =>
+      o.setName('player').setDescription('Player name').setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('alliance')
+    .setDescription('Intel on an alliance, and start tracking what changes')
+    .addStringOption((o) =>
+      o.setName('name').setDescription('Alliance name').setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('watchlist')
+    .setDescription('Who this server is tracking')
+    .toJSON(),
+
   new SlashCommandBuilder()
     .setName('glhelp')
     .setDescription('How GalaxyTimer works: every command and what it does')
@@ -176,6 +198,83 @@ async function handleTimers(interaction) {
   );
 }
 
+// Plafond par serveur : chaque entite suivie coute une requete API par releve.
+// Sans limite, un serveur actif finirait par marteler une API tierce.
+const MAX_WATCHED_PLAYERS = 40;
+const MAX_WATCHED_ALLIANCES = 10;
+
+async function handleScout(interaction) {
+  // Un appel reseau depasse souvent les 3 secondes accordees a une reponse.
+  await interaction.deferReply();
+  const name = interaction.options.getString('player');
+
+  const user = await api.getUserByName(name).catch(() => null);
+  if (!user) {
+    await interaction.editReply(`No player found for \`${name}\`.`);
+    return;
+  }
+
+  const stats = await api.getUserStats(user.Id).catch(() => null);
+  const history = intel.playerHistory(user.Id);
+
+  // Scouter, c'est commencer a suivre : l'historique se construit tout seul.
+  const list = intel.watchList(interaction.guildId);
+  if (list.players.length < MAX_WATCHED_PLAYERS) {
+    intel.watch(interaction.guildId, 'player', user.Id, user.Name);
+  }
+  intel.recordPlayer(user.Id, intel.playerSnapshot(user, stats));
+
+  await interaction.editReply({
+    content: fit(playerReport(user, stats, history)),
+    allowedMentions: NO_PING,
+  });
+}
+
+async function handleAlliance(interaction) {
+  await interaction.deferReply();
+  const name = interaction.options.getString('name');
+
+  const alliance = await api.getAlliance(name).catch(() => null);
+  if (!alliance) {
+    await interaction.editReply(`No alliance found for \`${name}\`.`);
+    return;
+  }
+
+  const id = String(alliance.Id).toLowerCase();
+  const history = intel.allianceHistory(id);
+
+  const list = intel.watchList(interaction.guildId);
+  if (list.alliances.length < MAX_WATCHED_ALLIANCES) {
+    intel.watch(interaction.guildId, 'alliance', id, alliance.Name);
+  }
+  intel.recordAlliance(id, intel.allianceSnapshot(alliance));
+
+  await interaction.editReply({
+    content: fit(allianceReport(alliance, history)),
+    allowedMentions: NO_PING,
+  });
+}
+
+async function handleWatchlist(interaction) {
+  const { players, alliances } = intel.watchList(interaction.guildId);
+  if (!players.length && !alliances.length) {
+    await interaction.reply('Nothing tracked yet. Use `/scout` or `/alliance` to start.');
+    return;
+  }
+
+  const lines = [`**Tracked by this server**`];
+  if (players.length) {
+    lines.push(`Players (${players.length}/${MAX_WATCHED_PLAYERS}): ` +
+      players.map((p) => p.label).join(', '));
+  }
+  if (alliances.length) {
+    lines.push(`Alliances (${alliances.length}/${MAX_WATCHED_ALLIANCES}): ` +
+      alliances.map((a) => a.label).join(', '));
+  }
+  lines.push('', '_Snapshots are taken hourly. Only changes are stored._');
+  await interaction.reply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
+}
+
 async function handleHelp(interaction) {
   await interaction.reply({ content: helpText(), allowedMentions: NO_PING });
 }
@@ -183,6 +282,9 @@ async function handleHelp(interaction) {
 export async function handleCommand(interaction) {
   if (interaction.commandName === 'timers') return handleTimers(interaction);
   if (interaction.commandName === 'glhelp') return handleHelp(interaction);
+  if (interaction.commandName === 'scout') return handleScout(interaction);
+  if (interaction.commandName === 'alliance') return handleAlliance(interaction);
+  if (interaction.commandName === 'watchlist') return handleWatchlist(interaction);
 
   const item = ITEMS[interaction.commandName];
   if (!item) return undefined;

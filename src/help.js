@@ -45,6 +45,13 @@ export function helpText() {
     '',
     '`/timers` — everything you have running, with a **Stop** button on each.',
     '',
+    '**Intel** — public Galaxy Life data, tracked over time',
+    '`/scout <player>` — level, planets, HQ levels, attack record, and what',
+    'changed since the bot first saw them.',
+    '`/alliance <name>` — level, war points, war status, member movements.',
+    '`/watchlist` — who this server is tracking. Scouting adds them automatically;',
+    'snapshots are taken hourly and only changes are stored.',
+    '',
     'Every timer message carries buttons: **Restart**, **Repeat** (relaunch itself',
     'on each reset) and **Stop**. Only the owner of a timer can press them.',
   );

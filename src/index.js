@@ -4,6 +4,7 @@ import * as lock from './lock.js';
 import * as store from './store.js';
 import { ITEM_LIST } from './items.js';
 import * as scheduler from './scheduler.js';
+import * as intel from './intel.js';
 import { handleCommand } from './commands.js';
 import { loadEmojis } from './emoji.js';
 import { loadLibrary, librarySize } from './artwork.js';
@@ -50,6 +51,7 @@ startHealthServer({
 
 client.once(Events.ClientReady, async (c) => {
   await store.init();
+  await intel.init();
   await loadEmojis(c);
   for (const folder of new Set(ITEM_LIST.map((i) => i.artwork).filter(Boolean))) {
     loadLibrary(folder);
@@ -64,6 +66,7 @@ client.once(Events.ClientReady, async (c) => {
   console.log(`[bot] logged in as ${c.user.tag} — ${active} timer(s) restored`);
   scheduler.start(client);
   ready = { tag: c.user.tag, guilds: c.guilds.cache.size };
+  startIntelPolling();
 
 
 });
@@ -85,10 +88,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // Filet de securite : couvre les sorties qui ne passent pas par un signal.
 process.on('exit', () => lock.release());
 
+// Un releve par heure : assez fin pour voir une colonie apparaitre ou une
+// guerre demarrer, assez espace pour ne pas marteler une API tierce.
+const INTEL_POLL_MS = 60 * 60 * 1000;
+let intelTimer = null;
+
+function startIntelPolling() {
+  const run = async () => {
+    try {
+      const { watched, changed } = await intel.pollAll();
+      if (watched) console.log(`[intel] polled ${watched} entity(ies), ${changed} change(s) recorded`);
+    } catch (err) {
+      console.error('[intel] poll cycle failed:', err.message);
+    }
+  };
+  void run();
+  intelTimer = setInterval(() => void run(), INTEL_POLL_MS);
+}
+
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     console.log(`[bot] ${signal} received, shutting down.`);
     scheduler.stop();
+    if (intelTimer) clearInterval(intelTimer);
     lock.release();
     client.destroy();
     process.exit(0);
