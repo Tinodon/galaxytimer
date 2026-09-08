@@ -1,0 +1,33 @@
+{
+  "_comment": "Constantes de calibrage. Remplies par scout/calibrate.py, ajustables a la main.",
+
+  "guild_id": "796447983604072498",
+  "scout_name": "crawler",
+
+  "viewport": null,
+  "_viewport": "[x, y, largeur, hauteur] de la zone de carte a l'ecran. null = ecran entier.",
+
+  "drag": {
+    "step_x": 0,
+    "step_y": 0,
+    "_comment": "Pixels de deplacement par glissement. A mesurer : glisse la carte et regarde de combien les coordonnees affichees changent."
+  },
+
+  "grid": {
+    "columns": 0,
+    "rows": 0,
+    "_comment": "Nombre de pas pour couvrir la carte. 0 = non calibre."
+  },
+
+  "timing": {
+    "settle_ms": 900,
+    "jitter_ms": 400,
+    "_comment": "Attente apres chaque deplacement, plus une variation aleatoire. Laisser le temps a l'affichage de se stabiliser avant la capture."
+  },
+
+  "session": {
+    "max_minutes": 30,
+    "max_captures": 400,
+    "_comment": "Bornes dures. Un script qui tourne sans limite finit par tourner la nuit entiere sur un ecran d'erreur."
+  }
+}

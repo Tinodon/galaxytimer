@@ -3,3 +3,12 @@ node_modules/
 .env.*
 !.env.example
 data/
+
+# Captures d'ecran : volumineuses, propres a une machine, et elles montrent
+# l'ecran de jeu (ressources, pseudos d'autres joueurs). Le depot est public :
+# rien de tout ca n'a a y figurer. scout/selftest.py se contente de dire que la
+# capture de reference manque.
+scout/captures/
+scout/debug/
+scout/crawl_state.json
+__pycache__/

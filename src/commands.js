@@ -16,6 +16,8 @@ import { helpText } from './help.js';
 import * as api from './glapi.js';
 import * as intel from './intel.js';
 import { playerReport, allianceReport, fit } from './intelview.js';
+import * as pins from './pins.js';
+import { discordRelative } from './duration.js';
 
 // Le message nomme son proprietaire mais ne doit pinger personne : seul le ping
 // de fin de timer a le droit de notifier.
@@ -69,6 +71,31 @@ export const definitions = [
     .setDescription('Intel on an alliance, and start tracking what changes')
     .addStringOption((o) =>
       o.setName('name').setDescription('Alliance name').setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('pin')
+    .setDescription('Record colony coordinates you saw in game')
+    .addStringOption((o) =>
+      o.setName('player').setDescription('Whose colonies').setRequired(true))
+    .addStringOption((o) =>
+      o.setName('coords')
+        .setDescription('One or more pairs, e.g. 512,340 601,299')
+        .setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('find')
+    .setDescription('Every colony coordinate this server knows for a player')
+    .addStringOption((o) =>
+      o.setName('player').setDescription('Player name').setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('map')
+    .setDescription('Known colonies of every member of an alliance')
+    .addStringOption((o) =>
+      o.setName('alliance').setDescription('Alliance name').setRequired(true))
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -255,6 +282,120 @@ async function handleAlliance(interaction) {
   });
 }
 
+/** Ligne "(512,340) — par X, il y a 2 jours". */
+const pinLine = (c) => `\`(${String(c.x).padStart(4)},${String(c.y).padStart(4)})\` — ${c.by}, ${discordRelative(c.at)}`;
+
+async function handlePin(interaction) {
+  await interaction.deferReply();
+  const name = interaction.options.getString('player');
+  const { coords, error } = pins.parseCoords(interaction.options.getString('coords'));
+  if (error) {
+    await interaction.editReply(error);
+    return;
+  }
+
+  // On resout le joueur via l'API : le releve est ainsi rattache a un id
+  // stable, meme si la personne change de pseudo.
+  const user = await api.getUserByName(name).catch(() => null);
+  if (!user) {
+    await interaction.editReply(`No player found for \`${name}\`.`);
+    return;
+  }
+
+  const result = pins.pin(
+    interaction.guildId,
+    { id: user.Id, name: user.Name },
+    coords,
+    displayNameOf(interaction),
+  );
+
+  const known = user.Planets?.length ?? 0;
+  const parts = [];
+  if (result.added) parts.push(`**${result.added}** new`);
+  if (result.updated) parts.push(`${result.updated} already known`);
+
+  await interaction.editReply({
+    content: [
+      `**${user.Name}** — ${parts.join(', ')}.`,
+      `${result.total} coordinate(s) recorded out of **${known}** colonies he owns.`,
+    ].join('\n'),
+    allowedMentions: NO_PING,
+  });
+}
+
+async function handleFind(interaction) {
+  await interaction.deferReply();
+  const name = interaction.options.getString('player');
+
+  const user = await api.getUserByName(name).catch(() => null);
+  if (!user) {
+    await interaction.editReply(`No player found for \`${name}\`.`);
+    return;
+  }
+
+  const entry = pins.forPlayer(interaction.guildId, user.Id);
+  const owned = user.Planets?.length ?? 0;
+  if (!entry?.coords.length) {
+    await interaction.editReply(
+      `**${user.Name}** owns **${owned}** colonies. None mapped yet — ` +
+      `record what you see with \`/pin\`.`,
+    );
+    return;
+  }
+
+  const lines = [
+    `**${user.Name}** — level ${user.Level} · ${user.AllianceId ?? 'no alliance'}`,
+    `**${entry.coords.length}/${owned}** colonies mapped`,
+    '',
+    ...entry.coords.map(pinLine),
+  ];
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
+}
+
+async function handleMap(interaction) {
+  await interaction.deferReply();
+  const name = interaction.options.getString('alliance');
+
+  const alliance = await api.getAlliance(name).catch(() => null);
+  if (!alliance) {
+    await interaction.editReply(`No alliance found for \`${name}\`.`);
+    return;
+  }
+
+  const known = pins.all(interaction.guildId);
+  const rows = [];
+  let mapped = 0;
+
+  for (const member of alliance.Members ?? []) {
+    const entry = known[String(member.Id)];
+    if (!entry?.coords.length) continue;
+    mapped += entry.coords.length;
+    rows.push(
+      `**${member.Name}** (lvl ${member.Level}) — ` +
+      entry.coords.map((c) => `\`${c.x},${c.y}\``).join(' '),
+    );
+  }
+
+  if (!rows.length) {
+    await interaction.editReply(
+      `**${alliance.Name}** — ${alliance.Members?.length ?? 0} members, nothing mapped yet.
+` +
+      'Start with `/pin player:<name> coords:<x,y ...>`.',
+    );
+    return;
+  }
+
+  await interaction.editReply({
+    content: fit([
+      `**${alliance.Name}** — ${mapped} colonies mapped across ${rows.length} member(s)`,
+      alliance.InWar ? `**AT WAR** against ${alliance.OpponentAllianceId}` : '',
+      '',
+      ...rows,
+    ].filter(Boolean).join('\n')),
+    allowedMentions: NO_PING,
+  });
+}
+
 async function handleWatchlist(interaction) {
   const { players, alliances } = intel.watchList(interaction.guildId);
   if (!players.length && !alliances.length) {
@@ -285,6 +426,9 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'scout') return handleScout(interaction);
   if (interaction.commandName === 'alliance') return handleAlliance(interaction);
   if (interaction.commandName === 'watchlist') return handleWatchlist(interaction);
+  if (interaction.commandName === 'pin') return handlePin(interaction);
+  if (interaction.commandName === 'find') return handleFind(interaction);
+  if (interaction.commandName === 'map') return handleMap(interaction);
 
   const item = ITEMS[interaction.commandName];
   if (!item) return undefined;

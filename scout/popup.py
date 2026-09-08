@@ -1,0 +1,218 @@
+"""Lecture d'un popup de systeme Galaxy Life.
+
+Lire le popup entier d'un coup ne marche pas : les pseudos sont ecrits en tres
+petit sur des vignettes colorees, et Tesseract les rate presque tous. On
+procede donc en trois temps :
+
+    1. localiser le cadre du popup grace a sa bordure cyan ;
+    2. lire le titre, qui contient les coordonnees du systeme ;
+    3. decouper les 12 etiquettes de la grille et lire chacune separement,
+       tres agrandie.
+
+Le decoupage repose sur la grille 6x2 du jeu, exprimee en fractions de la
+taille du popup — elle reste valable quelle que soit la resolution.
+
+    python scout/popup.py <image.png>      teste sur une capture existante
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytesseract
+from PIL import Image, ImageOps
+
+# "RAN (688,852)" — seules les coordonnees comptent vraiment.
+TITLE_COORDS = re.compile(r"\(?\s*(\d{1,4})\s*[,.]\s*(\d{1,4})\s*\)?")
+
+NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+
+# Geometrie de la grille, en fraction de la taille du popup.
+# Geometrie mesuree, pas devinee : scout/tune.py balaie les valeurs possibles
+# et retient celles qui resolvent le plus de pseudos sans jamais en confondre.
+# Relancer tune.py si le jeu change de mise en page.
+GRID = {
+    "name_top": 0.232,     # haut de la bande de nom, premiere rangee
+    "name_height": 0.052,
+    "row_pitch": 0.294,    # ecart vertical entre les deux rangees
+    "first_left": 0.045,   # bord gauche de la premiere colonne
+    "col_pitch": 0.152,    # ecart horizontal entre colonnes
+    # Nettement plus large que la vignette. Les pseudos longs debordent sur
+    # leurs voisines : couper au ras de la vignette les tronque et les rend
+    # irrecuperables, alors qu'un peu de pollution voisine se rattrape au
+    # rapprochement.
+    "col_width": 0.165,
+    "columns": 6,
+    "rows": 2,
+}
+
+
+def find_popup(image):
+    """Rectangle du popup, repere par sa bordure cyan. None si absent.
+
+    Piege : la barre superieure du jeu est du meme cyan et traverse tout
+    l'ecran. On s'appuie donc d'abord sur les bords VERTICAUX, que seule la
+    boite de dialogue possede, puis on ne retient que les lignes horizontales
+    dont la largeur correspond a celle du popup — la barre du jeu, large de tout
+    l'ecran, est ainsi ecartee.
+    """
+    arr = np.array(image.convert("RGB"))
+    r, g, b = arr[:, :, 0].astype(int), arr[:, :, 1].astype(int), arr[:, :, 2].astype(int)
+    cyan = (g > 150) & (b > 150) & (r < 120)
+    if cyan.sum() < 2000:
+        return None
+
+    height, width = cyan.shape
+
+    # Bords verticaux : colonnes ou le cyan court sur une grande hauteur.
+    columns = cyan.sum(axis=0)
+    vertical = np.nonzero(columns > height * 0.2)[0]
+    if len(vertical) < 2:
+        return None
+    x0, x1 = int(vertical.min()), int(vertical.max())
+    popup_width = x1 - x0
+    if popup_width < 300:
+        return None
+
+    # Bords horizontaux : lignes dont la largeur cyan colle a celle du popup.
+    rows = cyan.sum(axis=1)
+    matching = np.nonzero(
+        (rows > popup_width * 0.7) & (rows < popup_width * 1.3)
+    )[0]
+    if len(matching) < 2:
+        return None
+    y0, y1 = int(matching.min()), int(matching.max())
+    if y1 - y0 < 200:
+        return None
+
+    return (x0, y0, x1, y1)
+
+
+# Corps de la vignette, sous la bande de nom, en fraction du popup.
+TILE = {"top_offset": 0.06, "height": 0.17, "width_ratio": 0.85}
+
+# Une vignette occupee est magenta (bleu nettement au-dessus du vert), une
+# vignette libre est cyan (vert et bleu a egalite). Mesure sur capture reelle :
+# occupees entre -25 et -37, libres a -7. Le seuil est donc large.
+OCCUPIED_GREEN_BLUE_MAX = -15
+
+
+def is_occupied(popup, left, top):
+    """Emplacement occupe ? Decide par la COULEUR de la vignette.
+
+    Bien plus fiable que le texte : une case libre affiche "FREE PLANET" en
+    minuscule, que l'OCR rend en bouillie variable ("coce", "lepce"...) qu'on ne
+    peut pas filtrer par une liste de fautes.
+    """
+    width, height = popup.size
+    tile = popup.crop((
+        int(left * width),
+        int((top + TILE["top_offset"]) * height),
+        int((left + GRID["col_pitch"] * TILE["width_ratio"]) * width),
+        int((top + TILE["top_offset"] + TILE["height"]) * height),
+    ))
+    arr = np.array(tile.convert("RGB")).astype(int)
+    if arr.size == 0:
+        return False
+    return arr[:, :, 1].mean() - arr[:, :, 2].mean() < OCCUPIED_GREEN_BLUE_MAX
+
+
+def ocr(image, scale, threshold, psm=7, whitelist=None):
+    grey = image.convert("L")
+    grey = grey.resize((grey.width * scale, grey.height * scale), Image.LANCZOS)
+    binary = ImageOps.invert(grey.point(lambda p: 255 if p > threshold else 0))
+    config = "--psm {}".format(psm)
+    if whitelist:
+        config += " -c tessedit_char_whitelist={}".format(whitelist)
+    return pytesseract.image_to_string(binary, config=config).strip()
+
+
+def best_read(image, scale, thresholds, whitelist=None):
+    """Le jeu varie les fonds : on essaie plusieurs seuils, on garde le meilleur."""
+    best = ""
+    for threshold in thresholds:
+        text = ocr(image, scale, threshold, whitelist=whitelist)
+        cleaned = "".join(ch for ch in text if ch.isalnum() or ch in "_-")
+        if len(cleaned) > len(best):
+            best = cleaned
+    return best
+
+
+def read_popup(image, debug_dir=None):
+    """Renvoie {'coords': (x, y), 'players': [...]} ou None si pas de popup."""
+    box = find_popup(image)
+    if not box:
+        return None
+
+    x0, y0, x1, y1 = box
+    popup = image.crop((x0, y0, x1, y1))
+    width, height = popup.size
+    if debug_dir:
+        Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        popup.save(Path(debug_dir) / "popup.png")
+
+    # --- Titre ---
+    title_img = popup.crop((0, 0, width, int(height * 0.09)))
+    title_text = ""
+    for scale in (3, 4):
+        for threshold in (120, 150, 180):
+            candidate = ocr(title_img, scale, threshold)
+            if TITLE_COORDS.search(candidate):
+                title_text = candidate
+                break
+        if title_text:
+            break
+
+    match = TITLE_COORDS.search(title_text)
+    coords = (int(match.group(1)), int(match.group(2))) if match else None
+
+    # --- Les 12 emplacements ---
+    players = []
+    for row in range(GRID["rows"]):
+        for col in range(GRID["columns"]):
+            slot = row * GRID["columns"] + col
+            left = GRID["first_left"] + col * GRID["col_pitch"]
+            top = GRID["name_top"] + row * GRID["row_pitch"]
+
+            if not is_occupied(popup, left, top):
+                continue
+
+            crop = popup.crop((
+                int(left * width), int(top * height),
+                int((left + GRID["col_width"]) * width),
+                int((top + GRID["name_height"]) * height),
+            ))
+            if debug_dir:
+                crop.save(Path(debug_dir) / "nom_r{}c{}.png".format(row, col))
+
+            name = best_read(crop, 6, (110, 140, 170, 200), whitelist=NAME_CHARS)
+            players.append({"slot": slot, "name": name})
+
+    return {"coords": coords, "title": title_text, "players": players}
+
+
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python scout/popup.py <image.png> [--debug]")
+
+    image = Image.open(sys.argv[1])
+    debug = Path(__file__).parent / "debug" if "--debug" in sys.argv else None
+    result = read_popup(image, debug_dir=debug)
+
+    if not result:
+        print("Aucun popup detecte dans cette image.")
+        return
+
+    print("titre lu    : {!r}".format(result["title"]))
+    print("coordonnees : {}".format(result["coords"] or "NON LUES"))
+    print("emplacements :")
+    for player in result["players"]:
+        label = player["name"] or "(vide ou illisible)"
+        print("   {:>2}  {}".format(player["slot"], label))
+
+
+if __name__ == "__main__":
+    main()

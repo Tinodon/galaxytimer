@@ -1,0 +1,115 @@
+"""Rapprochement entre un pseudo lu par l'OCR et un vrai pseudo du jeu.
+
+L'OCR ne rend jamais exactement le nom : la police du jeu confond
+systematiquement certaines formes. Observe sur de vraies captures :
+
+    SzuetamNarab  ->  SZUETANNARAB   (m lu "nn")
+    Briankings    ->  SRIANKINGS     (B lu S)
+    YaGirlTie     ->  YAGIRUTIE      (l lu U)
+    ALPHERATZ     ->  ALPHERATS      (Z lu S)
+
+Interroger l'API a chaque lecture couterait des dizaines de requetes par
+systeme, ce qui est intenable sur des dizaines de milliers d'ecrans. On stocke
+donc la lecture brute pendant le balayage, et on rapproche au moment de la
+consultation, hors ligne.
+
+La regle : dans le doute, ne rien affirmer. Un faux rapprochement envoie
+quelqu'un attaquer une base qui n'est pas la bonne.
+"""
+
+from __future__ import annotations
+
+# Formes que la police du jeu rend indistinguables. On ramene les deux cotes
+# a un meme symbole avant de comparer, plutot que de tolerer une distance
+# d'edition plus grande — ce qui creerait des faux positifs ailleurs.
+CONFUSIONS = [
+    ("m", "nn"),
+    ("rn", "nn"),
+    ("b", "s"),
+    ("8", "s"),
+    ("l", "u"),
+    ("i", "l"),
+    ("1", "l"),
+    ("z", "s"),
+    ("2", "z"),
+    ("0", "o"),
+    ("5", "s"),
+    ("g", "q"),
+    ("vv", "w"),
+]
+
+
+def canonical(name):
+    """Forme comparable : minuscules, sans separateur, confusions applatis."""
+    text = "".join(ch for ch in str(name).lower() if ch.isalnum())
+    # Les paires les plus longues d'abord, sinon "nn" serait coupe par "n".
+    for left, right in sorted(CONFUSIONS, key=lambda p: -max(len(p[0]), len(p[1]))):
+        symbol = left if len(left) <= len(right) else right
+        text = text.replace(left, symbol).replace(right, symbol)
+    return text
+
+
+def distance(a, b):
+    """Distance de Levenshtein, en gardant seulement deux lignes en memoire."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        for j, cb in enumerate(b, start=1):
+            current.append(min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + (ca != cb),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def similarity(ocr_name, real_name):
+    """Score entre 0 et 1 apres applatissement des confusions."""
+    a, b = canonical(ocr_name), canonical(real_name)
+    if not a or not b:
+        return 0.0
+    return 1 - distance(a, b) / max(len(a), len(b))
+
+
+# En dessous, on considere que ce n'est pas la meme personne. Regle sur de
+# vraies lectures : les bons rapprochements depassent 0.85, les mauvais
+# plafonnent nettement plus bas.
+THRESHOLD = 0.82
+
+
+def best_match(ocr_name, candidates, threshold=THRESHOLD):
+    """Meilleur candidat, ou None si aucun n'est assez proche.
+
+    Renvoie aussi None en cas d'egalite entre deux candidats : mieux vaut ne
+    rien dire que designer le mauvais joueur.
+    """
+    scored = sorted(
+        ((similarity(ocr_name, c), c) for c in candidates),
+        key=lambda pair: -pair[0],
+    )
+    if not scored or scored[0][0] < threshold:
+        return None
+    if len(scored) > 1 and abs(scored[0][0] - scored[1][0]) < 0.02:
+        return None
+    return {"name": scored[0][1], "score": round(scored[0][0], 3)}
+
+
+# Lectures produites par une case vide "FREE PLANET". Les marqueurs passent par
+# la meme normalisation que le texte compare, sinon ils ne correspondent jamais.
+FREE_MARKERS = ("free", "planet", "coce", "ptanet", "pianet")
+
+
+def looks_like_free_slot(ocr_name):
+    """Vrai si cette lecture vient d'un emplacement libre, pas d'un joueur."""
+    flat = canonical(ocr_name)
+    if len(flat) < 4:
+        return True
+    return any(canonical(marker) in flat for marker in FREE_MARKERS)
