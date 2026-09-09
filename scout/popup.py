@@ -101,9 +101,19 @@ TILE = {"top_offset": 0.06, "height": 0.17, "width_ratio": 0.85}
 
 # Le niveau de QG : un chiffre seul, a droite du petit personnage. Bien plus
 # simple a lire qu'un pseudo — un seul caractere, uniquement des chiffres, a
-# position fixe. En dessous se trouve le niveau du JOUEUR, qu'on ne lit pas :
-# l'API le donne deja et de facon fiable.
+# position fixe. En dessous, sur le badge etoile, le niveau du JOUEUR.
+#
+# Ce niveau-la a longtemps ete ignore ici, au motif que l'API le donne deja.
+# C'etait passer a cote de l'essentiel : l'API le donne pour un pseudo qu'on
+# connait, or tout le probleme est justement de ne pas le connaitre. Lu sur la
+# vignette, il devient la PREUVE qui depart entre deux pseudos plausibles — et
+# qui rejette une lecture fausse tombee par hasard sur un joueur reel.
 HQ_DIGIT = {"left": 0.085, "width": 0.042, "top": 0.155, "height": 0.055}
+# Recadrage large, etoile comprise : le nombre est CENTRE sur son badge, donc
+# sa position varie avec sa longueur et aucun cadrage fixe ne convient a la
+# fois a "6" et a "128". L'etoile est ecartee ensuite, par le creux de colonnes
+# qui la separe des chiffres.
+LEVEL_DIGIT = {"left": 0.055, "width": 0.105, "top": 0.218, "height": 0.044}
 
 # Une vignette occupee est magenta (bleu nettement au-dessus du vert), une
 # vignette libre est cyan (vert et bleu a egalite). Mesure sur capture reelle :
@@ -179,6 +189,81 @@ def read_hq_level(popup, left, top):
     return None
 
 
+def read_player_level(popup, left, top):
+    """Niveau du joueur affiche sur le badge etoile, ou None si illisible.
+
+    Un a trois chiffres, en gris pale sur vignette sombre ou en blanc franc sur
+    vignette active : le seuil se calcule donc sur le recadrage lui-meme, comme
+    pour le QG. Un seuil fixe regle pour l'un efface completement l'autre.
+
+    Rendre None n'est pas un echec grave : le niveau sert a departager des
+    pseudos, pas a les lire. Sans lui on retombe simplement sur l'ancien
+    comportement.
+    """
+    width, height = popup.size
+    crop = popup.crop((
+        int((left + LEVEL_DIGIT["left"]) * width),
+        int((top + LEVEL_DIGIT["top"]) * height),
+        int((left + LEVEL_DIGIT["left"] + LEVEL_DIGIT["width"]) * width),
+        int((top + LEVEL_DIGIT["top"] + LEVEL_DIGIT["height"]) * height),
+    ))
+    if crop.width < 3 or crop.height < 3:
+        return None
+
+    from glyphs import otsu_threshold
+
+    grey = crop.convert("L")
+    base = otsu_threshold(np.array(grey).astype(int))
+
+    # L'etoile du badge touche le bord gauche et se lit comme un 9 collé devant
+    # le nombre (niveau 6 rendu "96"). Elle en est toujours separee par une
+    # colonne vide : on jette la premiere trainee d'encre si elle part du bord.
+    columns = (np.array(grey).astype(int) > base).sum(axis=0)
+    runs = []
+    start = None
+    for index, value in enumerate(columns):
+        if value > 0 and start is None:
+            start = index
+        elif value == 0 and start is not None:
+            runs.append((start, index - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(columns) - 1))
+    if len(runs) > 1 and runs[0][0] == 0:
+        runs = runs[1:]
+    if runs:
+        grey = grey.crop((max(runs[0][0] - 2, 0), 0,
+                          min(runs[-1][1] + 3, grey.width), grey.height))
+    if grey.width < 3:
+        return None
+
+    # Plusieurs seuils, et c'est la lecture MAJORITAIRE qui gagne — pas la
+    # premiere qui sort. Prendre la premiere renvoyait "28" pour un niveau 128 :
+    # un seul seuil escamotait le 1, et il se trouvait passer en tete. Chaque
+    # niveau de la vignette de reference (89, 4, 6, 128) ressort correctement
+    # avec ce balayage, aucun avec un seuil unique.
+    enlarged = grey.resize((grey.width * 8, grey.height * 8), Image.LANCZOS)
+    votes = {}
+    for offset in (5, 15, 25, 35):
+        binary = ImageOps.invert(
+            enlarged.point(lambda p: 255 if p > base + offset else 0))
+        text = pytesseract.image_to_string(
+            binary,
+            config="--psm 7 -c tessedit_char_whitelist=0123456789",
+        ).strip()
+        digits = "".join(ch for ch in text if ch.isdigit())
+        # Le jeu plafonne bien en dessous de 1000 : au-dela de trois chiffres,
+        # c'est du decor lu comme un nombre.
+        if digits and len(digits) <= 3 and int(digits) > 0:
+            votes[digits] = votes.get(digits, 0) + 1
+
+    if not votes:
+        return None
+    # A egalite, la lecture la plus courte : un seuil trop bas colle du decor
+    # aux chiffres, il n'en retire jamais.
+    return int(max(votes, key=lambda d: (votes[d], -len(d))))
+
+
 def is_occupied(popup, left, top):
     return tile_state(popup, left, top) == "occupee"
 
@@ -219,15 +304,37 @@ def ocr(image, scale, threshold, psm=7, whitelist=None):
     return pytesseract.image_to_string(binary, config=config).strip()
 
 
-def best_read(image, scale, thresholds, whitelist=None):
-    """Le jeu varie les fonds : on essaie plusieurs seuils, on garde le meilleur."""
-    best = ""
+def all_reads(image, scale, thresholds, whitelist=None):
+    """Toutes les lectures distinctes, du seuil le plus sombre au plus clair.
+
+    Le jeu varie les fonds, donc aucun seuil ne convient partout : un pseudo
+    pale sur vignette decoree sort a 110, un pseudo blanc sur fond violet sort
+    a 200. On ne tranche PAS ici — le choix se fait dans resolve.py, qui a le
+    dictionnaire des joueurs sous la main et peut donc juger laquelle des
+    lectures designe quelqu'un de reel.
+    """
+    reads = []
     for threshold in thresholds:
         text = ocr(image, scale, threshold, whitelist=whitelist)
         cleaned = "".join(ch for ch in text if ch.isalnum() or ch in "_-")
-        if len(cleaned) > len(best):
-            best = cleaned
-    return best
+        if cleaned and cleaned not in reads:
+            reads.append(cleaned)
+    return reads
+
+
+def best_read(image, scale, thresholds, whitelist=None):
+    """Une seule lecture, pour les usages qui n'ont pas de dictionnaire.
+
+    Garder la PLUS LONGUE, comme le faisait cette fonction, retenait presque
+    toujours la plus bruitee : le decor qui deborde d'une vignette ajoute des
+    caracteres, et une lecture polluee bat donc une lecture propre. Mesure sur
+    un popup de reference : MYRA sortait 'AAYRA' a 110 et 'omesue' a 140, et
+    c'est 'omesue' qui gagnait ; HANSWORSDT sortait juste a 200 et perdait
+    contre 'HANSVWWORSDT' a 170. On prend desormais la plus COURTE des lectures
+    non vides, qui est celle ou le seuil a le mieux separe le texte du fond.
+    """
+    reads = all_reads(image, scale, thresholds, whitelist=whitelist)
+    return min(reads, key=len) if reads else ""
 
 
 def read_popup(image, debug_dir=None, expected=None, tolerance=12):
@@ -314,11 +421,15 @@ def read_popup(image, debug_dir=None, expected=None, tolerance=12):
             if debug_dir:
                 crop.save(Path(debug_dir) / "nom_r{}c{}.png".format(row, col))
 
-            name = best_read(crop, 6, (110, 140, 170, 200), whitelist=NAME_CHARS)
+            reads = all_reads(crop, 6, (110, 140, 170, 200), whitelist=NAME_CHARS)
             players.append({
                 "slot": slot,
-                "name": name,
+                # Le meilleur candidat depend du dictionnaire : on transmet
+                # toutes les lectures et resolve.py tranchera.
+                "name": min(reads, key=len) if reads else "",
+                "reads": reads,
                 "hq": read_hq_level(popup, left, top),
+                "level": read_player_level(popup, left, top),
             })
 
     return {

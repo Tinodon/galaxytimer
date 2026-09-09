@@ -101,19 +101,38 @@ def text_band(mask, min_rows=4):
     if not rows.any():
         return mask
 
-    # La ligne la plus chargee appartient forcement au texte ; on s'etend de
-    # part et d'autre tant que les lignes restent denses.
-    peak = int(np.argmax(rows))
-    floor = max(1, rows[peak] * 0.15)
-    top = peak
-    while top > 0 and rows[top - 1] >= floor:
-        top -= 1
-    bottom = peak
-    while bottom < len(rows) - 1 and rows[bottom + 1] >= floor:
-        bottom += 1
+    # On decoupe en bandes denses separees par des creux, puis on prend LA PLUS
+    # HAUTE — pas la plus chargee.
+    #
+    # Partir de la ligne la plus chargee semblait sur, et ne l'etait pas : sur
+    # une vignette decoree, le sprite qui deborde par le bas est plus dense que
+    # le pseudo lui-meme. Le lecteur cadrait alors le decor au lieu du nom et
+    # rendait une suite de lettres tiree de rien (MYRA lu "omesue"). La grille
+    # place le nom en haut du recadrage : la premiere bande est la bonne.
+    floor = max(1, rows.max() * 0.15)
+    bands = []
+    start = None
+    for index, value in enumerate(rows):
+        if value >= floor and start is None:
+            start = index
+        elif value < floor and start is not None:
+            bands.append((start, index - 1))
+            start = None
+    if start is not None:
+        bands.append((start, len(rows) - 1))
 
-    if bottom - top + 1 < min_rows:
+    # Une bande trop courte ou trop legere est un artefact (bord de vignette,
+    # bruit JPEG), pas une ligne de texte.
+    mass = {band: int(rows[band[0]:band[1] + 1].sum()) for band in bands}
+    heaviest = max(mass.values()) if mass else 0
+    usable = [
+        band for band in bands
+        if band[1] - band[0] + 1 >= min_rows and mass[band] >= heaviest * 0.3
+    ]
+    if not usable:
         return mask
+
+    top, bottom = usable[0]
     return mask[top:bottom + 1, :]
 
 

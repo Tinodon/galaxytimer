@@ -1,32 +1,101 @@
 {
-  "_comment": "Pseudos confirmes a l'oeil par Noe, popup par popup. Sert de verite de reference pour decouper les gabarits de caracteres. Les emplacements sont dans l'ordre de lecture : rangee du haut de gauche a droite, puis rangee du bas.",
-
+  "_comment": "Pseudos confirmes a l'oeil par Noe, popup par popup. Sert de verite de reference pour decouper les gabarits de caracteres. Les emplacements sont dans l'ordre de lecture : rangee du haut de gauche a droite, puis rangee du bas. Corrections verifiees contre l'API le 09/09/2026 : cinq pseudos releves a la main n'existaient pas dans le jeu (stinjr, zane771, raddoslaw, michaeld132, kaikodoge) et un emplacement en collait deux en un (aquiles307wkoussay). Mesurer contre une reference fausse fait passer une lecture juste pour une erreur.",
   "0_0_1124_540": [
-    "mateoaf608", "niko1", "pjotrdepro", "therudy69", "stinjr", "epicportal",
-    "tongaperego", "senpaiii", "konopiagg", "laclonada", "methusalem", "wolfhoundo1"
+    "mateoaf608",
+    "niko1",
+    "pjotrdepro",
+    "therudy69",
+    "Stijnjr",
+    "epicportal",
+    "tongaperego",
+    "senpaiii",
+    "konopiagg",
+    "laclonada",
+    "methusalem",
+    "wolfhoundo1"
   ],
   "0_0_1148_752": [
-    "roylothbrok", "buffywaifu", "mailardo", "judgement", "thpussan", "tujivanoers",
-    "bercikowsky", "angueliguix", "staniossek1", "ortegasebas57", "blacklion", "jogonza"
+    "roylothbrok",
+    "buffywaifu",
+    "mailardo",
+    "judgement",
+    "thpussan",
+    "tujivanoers",
+    "bercikowsky",
+    "angueliguix",
+    "staniossek1",
+    "ortegasebas57",
+    "blacklion",
+    "jogonza"
   ],
   "0_0_1304_504": [
-    "elbryan", "inmortu2", "twitty", "datafish", "osmanapp12", "protetoro19",
-    "moewbah", "kat", "sido", "xsvbastian", "olidlsees", "pwndathepwner"
+    "elbryan",
+    "inmortu2",
+    "twitty",
+    "datafish",
+    "osmanapp12",
+    "protetoro19",
+    "moewbah",
+    "kat",
+    "sido",
+    "xsvbastian",
+    "olidlsees",
+    "pwndathepwner"
   ],
   "0_0_1352_844": [
-    "thpussan", "philippie", "kr2ys2tif32171", "byverox", "karboon", "dormistic",
-    "jasiumater", "1tapik4", "hatto", "natmor", "kamilchsonuk", "aisac"
+    "thpussan",
+    "philippie",
+    "kr2ys2tif32171",
+    "byverox",
+    "karboon",
+    "dormistic",
+    "jasiumater",
+    "1tapik4",
+    "hatto",
+    "natmor",
+    "kamilchsonuk",
+    "aisac"
   ],
   "0_3_872_724": [
-    "geovani192", "aquiles307wkoussay", "zane771", "jayk", "4ndromed1exe",
-    "samudiaz", "electronlibre404", "fuhlt", "szelagi", "michaeld132", "raddoslaw"
+    "geovani192",
+    "aquiles307",
+    "Wkoussay",
+    "ZANE77I",
+    "jayk",
+    "4ndromed1exe",
+    "samudiaz",
+    "electronlibre404",
+    "fuhlt",
+    "szelagi",
+    "michaeldj132",
+    "Radddoslaw"
   ],
   "16_18_84_368": [
-    "onezeit", "poiuytreza13", "xpizzs", "woutyty", "davibriones", "erwin001",
-    "loboofcoimbra", "miroche", "baldi", "cevallosdario02", "virides", "wolfee"
+    "onezeit",
+    "poiuytreza13",
+    "xpizzs",
+    "woutyty",
+    "davibriones",
+    "erwin001",
+    "loboofcoimbra",
+    "miroche",
+    "baldi",
+    "cevallosdario02",
+    "virides",
+    "wolfee"
   ],
   "16_18_80_524": [
-    "feuliche", "diego470920", "kaikodoge", "cheeky20919", "dhovalkin", "dasyrian",
-    "goto3rdmoe", "hartel", "rogiero2", "beerman", "82446835", "logos"
+    "feuliche",
+    "diego470920",
+    "DaikoDoge",
+    "cheeky20919",
+    "dhovalkin",
+    "dasyrian",
+    "goto3rdmoe",
+    "hartel",
+    "rogiero2",
+    "beerman",
+    "82446835",
+    "logos"
   ]
 }

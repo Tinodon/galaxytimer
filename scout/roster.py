@@ -33,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 ROSTER_FILE = DATA_DIR / "roster.json"
 STATE_FILE = DATA_DIR / "roster_state.json"
+LEVELS_FILE = DATA_DIR / "roster_niveaux.json"
 
 ALPHABET = string.ascii_lowercase + string.digits
 
@@ -61,10 +62,14 @@ def fetch(pair):
         )
         text = response.text.strip()
         if not text.startswith("["):
-            return pair, [], "reponse inattendue"
-        return pair, [u["Name"] for u in json.loads(text) if u.get("Name")], None
+            return pair, {}, "reponse inattendue"
+        # Le niveau vient dans la meme reponse et ne coute donc rien de plus.
+        # Il sert a departager deux pseudos egalement plausibles pour une meme
+        # lecture : la vignette du jeu affiche le niveau, l'API aussi.
+        users = [u for u in json.loads(text) if u.get("Name")]
+        return pair, {u["Name"]: u.get("Level") for u in users}, None
     except Exception as error:  # noqa: BLE001
-        return pair, [], str(error)[:60]
+        return pair, {}, str(error)[:60]
 
 
 def load(path, default):
@@ -76,10 +81,15 @@ def load(path, default):
     return default
 
 
-def save_roster(names):
+def save_roster(names, levels=None):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ROSTER_FILE.write_text(json.dumps(sorted(names), ensure_ascii=False),
                            encoding="utf-8")
+    # Fichier separe : le dictionnaire de noms reste lisible par tout ce qui
+    # existe deja, et un relevé sans niveaux continue de fonctionner.
+    if levels:
+        LEVELS_FILE.write_text(json.dumps(levels, ensure_ascii=False),
+                               encoding="utf-8")
 
 
 def save_state(state):
@@ -89,6 +99,7 @@ def save_state(state):
 
 def build(only_failed=False):
     names = set(load(ROSTER_FILE, []))
+    levels = load(LEVELS_FILE, {})
     state = load(STATE_FILE, {"done": [], "failed": []})
     done, failed = set(state["done"]), set(state["failed"])
 
@@ -118,13 +129,14 @@ def build(only_failed=False):
                 done.add(pair)
                 before = len(names)
                 names.update(found)
+                levels.update({k: v for k, v in found.items() if v is not None})
                 gained = len(names) - before
                 if gained:
                     print("  {} -> {:>6} noms, {:>5} nouveaux  (total {})".format(
                         pair, len(found), gained, len(names)))
 
             if processed % 25 == 0:
-                save_roster(names)
+                save_roster(names, levels)
                 save_state({"done": sorted(done), "failed": sorted(failed)})
                 rate = processed / max(time.time() - started, 1)
                 left = (len(todo) - processed) / max(rate, 0.001) / 60

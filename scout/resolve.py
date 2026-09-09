@@ -34,6 +34,36 @@ RESOLVED_FILE = BASE_DIR / "data" / "systems_resolus.jsonl"
 NAMES_FILE = BASE_DIR / "data" / "pseudos_resolus.json"
 
 
+def slot_reads(entry):
+    """Les lectures candidates de chaque emplacement d'un systeme.
+
+    Les relevés d'avant la correction ne portent qu'une lecture par
+    emplacement ; on les traite comme une liste d'un seul element plutot que de
+    les ecarter.
+    """
+    players = entry.get("players", [])
+    reads = entry.get("reads") or []
+    return [
+        list(dict.fromkeys(reads[i])) if i < len(reads) and reads[i] else [name]
+        for i, name in enumerate(players)
+    ]
+
+
+def pick(candidates, resolved):
+    """La meilleure lecture d'un emplacement, et ce qu'elle designe.
+
+    Une lecture qui tombe sur un joueur reel bat une lecture qui ne mene nulle
+    part, quelle que soit sa longueur ; a egalite, le meilleur score gagne.
+    """
+    best = None
+    for raw in candidates:
+        result = resolved[raw]
+        rank = (1 if result["name"] else 0, result["score"] or 0)
+        if best is None or rank > best[0]:
+            best = (rank, raw, result)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def load_systems():
     entries = {}
     with SYSTEMS_FILE.open(encoding="utf-8") as handle:
@@ -56,9 +86,15 @@ def main():
     args = parser.parse_args()
 
     systems = load_systems()
+
+    # Chaque emplacement porte plusieurs lectures, une par seuil de binarisation.
+    # On les rapproche TOUTES et on garde la meilleure : c'est ici, et seulement
+    # ici, qu'on sait laquelle designe quelqu'un de reel. Trancher plus tot sur
+    # la longueur retenait la lecture la plus bruitee.
     raw_names = Counter()
     for entry in systems:
-        raw_names.update(entry.get("players", []))
+        for candidates in slot_reads(entry):
+            raw_names.update(candidates)
 
     print("{} systeme(s), {} colonie(s), {} pseudo(s) distincts".format(
         len(systems),
@@ -97,15 +133,23 @@ def main():
 
     # Pondere par le nombre de colonies : une lecture qui revient souvent pese
     # plus qu'une vue une seule fois.
-    slots = ok_slots = 0
+    slots = ok_slots = rescued = 0
     for entry in systems:
-        for name in entry.get("players", []):
+        for candidates in slot_reads(entry):
             slots += 1
-            if resolved[name]["name"]:
+            raw, result = pick(candidates, resolved)
+            if result and result["name"]:
                 ok_slots += 1
+                # Une colonie que l'ancienne regle aurait perdue : la lecture la
+                # plus longue ne menait a personne, une autre si.
+                if len(candidates) > 1 and raw != max(candidates, key=len):
+                    rescued += 1
     print("\n--- colonies ---")
     print("  {}/{} colonies rattachees a un joueur reel ({:.0f}%)".format(
         ok_slots, slots, 100 * ok_slots / max(slots, 1)))
+    if rescued:
+        print("  dont {} rattrapees en essayant tous les seuils de lecture".format(
+            rescued))
 
     if args.sample:
         corrections = [(k, v) for k, v in resolved.items()
@@ -126,12 +170,15 @@ def main():
     with RESOLVED_FILE.open("w", encoding="utf-8") as handle:
         for entry in systems:
             players = []
-            for name in entry.get("players", []):
-                result = resolved[name]
+            for candidates in slot_reads(entry):
+                raw, result = pick(candidates, resolved)
                 players.append({
-                    "raw": name,
+                    "raw": raw,
                     "name": result["name"],
                     "score": result["score"],
+                    # Les autres lectures du meme emplacement, pour pouvoir
+                    # verifier une correction sans relire l'image.
+                    "reads": candidates,
                 })
             handle.write(json.dumps({**entry, "players": players},
                                     ensure_ascii=False) + "\n")

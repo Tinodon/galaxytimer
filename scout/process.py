@@ -71,6 +71,11 @@ def read_one(path_str):
         "y": result["coords"][1],
         "name": result["name"],
         "players": [p["name"] for p in result["players"] if p["name"]],
+        # Toutes les lectures de chaque emplacement, une par seuil. resolve.py
+        # choisira celle qui designe un joueur reel : ici on n'a pas de quoi
+        # trancher, et trancher trop tot perdait le bon candidat.
+        "reads": [p.get("reads") or ([p["name"]] if p["name"] else [])
+                  for p in result["players"] if p["name"]],
         "screen": position_from_name(path.name),
     }
 
@@ -145,7 +150,8 @@ def main():
                         result["name"] or "?", result["x"], result["y"],
                         len(result["players"])))
                 store.record(result["x"], result["y"], result["name"],
-                             result["players"], screen=result["screen"])
+                             result["players"], screen=result["screen"],
+                             source=result["file"], reads=result.get("reads"))
 
             processed.add(result["file"])
 

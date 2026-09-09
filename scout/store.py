@@ -63,7 +63,7 @@ class SystemStore:
     def get(self, x, y):
         return self.systems.get((x, y))
 
-    def record(self, x, y, name, players, screen=None):
+    def record(self, x, y, name, players, screen=None, source=None, reads=None):
         """Ajoute ou met a jour un systeme. Renvoie True si c'est une nouveaute."""
         key = (x, y)
         is_new = key not in self.systems
@@ -80,6 +80,15 @@ class SystemStore:
         }
         if screen:
             entry["screen"] = list(screen)
+        # Le nom de l'image d'ou vient la lecture. Sans lui, verifier un pseudo
+        # douteux oblige a relire des dizaines de captures pour retrouver la
+        # bonne — ce qui est arrive deux fois.
+        if source:
+            entry["source"] = source
+        # Les lectures alternatives de chaque emplacement, dans le meme ordre
+        # que `players`. Elles ne servent qu'au rapprochement hors ligne.
+        if reads:
+            entry["reads"] = reads
 
         # Une relecture qui trouve MOINS de joueurs est probablement moins bonne
         # (popup mal capture, animation en cours) : on garde la plus riche.
@@ -87,6 +96,8 @@ class SystemStore:
         if previous and len(previous.get("players", [])) > len(players):
             entry["players"] = previous["players"]
             entry["name"] = entry["name"] or previous.get("name")
+            entry["source"] = previous.get("source", entry.get("source"))
+            entry["reads"] = previous.get("reads", entry.get("reads"))
 
         self.systems[key] = entry
         with self.path.open("a", encoding="utf-8") as handle:

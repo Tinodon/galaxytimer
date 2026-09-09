@@ -24,10 +24,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from names import canonical, weighted_distance  # noqa: E402
+from names import canonical, merge_variants, weighted_distance  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 ROSTER_FILE = BASE_DIR / "data" / "roster.json"
+LEVELS_FILE = BASE_DIR / "data" / "roster_niveaux.json"
 
 # Au-dessous, on refuse de trancher. Mieux vaut signaler un pseudo incertain que
 # d'en designer un faux : une coordonnee attribuee au mauvais joueur envoie
@@ -60,6 +61,24 @@ def reading_is_usable(reading):
     return None
 
 
+def _level_fits(name, level, levels):
+    """Le niveau de ce joueur colle-t-il a celui lu sur la vignette ?
+
+    Sans niveau connu pour le joueur, ou sans niveau lu, on ne conclut pas :
+    l'absence de preuve n'est pas une preuve d'absence, et rejeter dans le
+    doute perdrait bien plus de colonies que la mesure n'en sauve.
+
+    Une tolerance d'un cran couvre le decalage entre le moment de la capture et
+    celui de l'interrogation de l'API — le joueur a pu monter d'un niveau.
+    """
+    if level is None or not levels:
+        return True
+    known = levels.get(name)
+    if known is None:
+        return True
+    return abs(int(known) - int(level)) <= 1
+
+
 class Roster:
     """Le dictionnaire des joueurs, indexe pour la recherche approchee."""
 
@@ -69,6 +88,16 @@ class Roster:
                 raise SystemExit(
                     "Dictionnaire absent. Lance d'abord : python scout/roster.py")
             names = json.loads(ROSTER_FILE.read_text(encoding="utf-8"))
+
+        # Niveaux connus, quand roster.py les a releves. Optionnels : sans eux
+        # le rapprochement fonctionne comme avant, simplement sans la preuve
+        # qui departage deux pseudos aussi plausibles l'un que l'autre.
+        self.levels = {}
+        if LEVELS_FILE.exists():
+            try:
+                self.levels = json.loads(LEVELS_FILE.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
 
         self.names = names
         self.canonical = [canonical(n) for n in names]
@@ -124,8 +153,18 @@ class Roster:
         keep.sort(reverse=True)
         return [position for _, position in keep[:max_candidates]]
 
-    def match(self, reading):
+    def _level_fits(self, name, level):
+        return _level_fits(name, level, self.levels)
+
+    def match(self, reading, level=None):
         """Meilleur pseudo reel pour cette lecture, ou None si trop incertain.
+
+        `level` : le niveau lu sur la vignette du jeu. L'API donne le niveau de
+        chaque joueur, donc un candidat dont le niveau ne correspond pas n'est
+        pas le bon, quelle que soit la ressemblance des lettres. C'est la seule
+        chose qui rattrape une lecture fausse tombee par hasard sur un joueur
+        existant : NOSTER lu a la place de MOSTER designait "Noster", niveau
+        101, sur une vignette qui affiche 4.
 
         Renvoie un dictionnaire avec le nom, le score, et la raison du refus le
         cas echeant — l'appelant doit pouvoir dire POURQUOI il ne sait pas.
@@ -140,12 +179,27 @@ class Roster:
         if unusable:
             return {"name": None, "score": 0.0, "reason": unusable}
 
+        # Les formes obtenues en recollant un glyphe eclate ("aayra" -> "myra").
+        # Elles servent a TROUVER des candidats ; le score reste mesure sur la
+        # lecture d'origine, donc rien n'est offert gratuitement.
+        forms = merge_variants(flat)
+
         if flat in self.exact:
             position = self.exact[flat]
-            return {"name": self.names[position], "score": 1.0, "reason": "exact"}
+            name = self.names[position]
+            if self._level_fits(name, level):
+                return {"name": name, "score": 1.0, "reason": "exact"}
+            # Lecture qui existe telle quelle mais designe quelqu'un d'un autre
+            # niveau : on ne la valide pas, on cherche plus loin.
+
+        pool = []
+        for form in forms:
+            for position in self.candidates(form):
+                if position not in pool:
+                    pool.append(position)
 
         scored = []
-        for position in self.candidates(flat):
+        for position in pool:
             other = self.canonical[position]
             # Distance ponderee : les confusions que la lecture commet
             # reellement coutent moins cher qu'un changement impossible.
@@ -156,6 +210,16 @@ class Roster:
             return {"name": None, "score": 0.0, "reason": "aucun candidat"}
 
         scored.sort(reverse=True)
+
+        # Le niveau elimine les candidats impossibles AVANT le classement, donc
+        # avant le test d'ambiguite : deux pseudos a egalite dont un seul a le
+        # bon niveau ne sont plus ambigus du tout.
+        if level is not None and self.levels:
+            kept = [(sc, pos) for sc, pos in scored
+                    if self._level_fits(self.names[pos], level)]
+            if kept:
+                scored = kept
+
         best_score, best_position = scored[0]
         if best_score < MIN_SCORE:
             return {"name": None, "score": round(best_score, 3),
