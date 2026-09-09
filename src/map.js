@@ -18,6 +18,12 @@ const INDEX_KEY = 'map:index';
 // balayages.
 const CACHE_MS = 10 * 60 * 1000;
 
+// Une ABSENCE ne se garde pas aussi longtemps qu'une presence. Sans ca, une
+// recherche faite juste avant une publication fige un "rien ici" pendant dix
+// minutes, et la carte fraichement publiee reste invisible sans raison
+// apparente.
+const MISS_CACHE_MS = 20 * 1000;
+
 const cache = new Map();
 
 /** Meme normalisation que cote balayage, sans quoi les cles ne coincideraient pas. */
@@ -43,7 +49,11 @@ async function readKey(key) {
 
 async function loadShard(letter) {
   const cached = cache.get(letter);
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.data;
+  if (cached) {
+    const age = Date.now() - cached.at;
+    const limit = cached.data ? CACHE_MS : MISS_CACHE_MS;
+    if (age < limit) return cached.data;
+  }
 
   let data = null;
   try {
