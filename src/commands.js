@@ -9,7 +9,7 @@
 
 import { SlashCommandBuilder } from 'discord.js';
 import * as store from './store.js';
-import { ITEMS, ITEM_LIST, slugify, timerLabel } from './items.js';
+import { ITEMS, ITEM_LIST, fallbackItem, slugify, timerLabel } from './items.js';
 import { formatDuration, parseDuration } from './duration.js';
 import { startedText, panelText, artworkFor } from './ui.js';
 import { helpText } from './help.js';
@@ -332,7 +332,7 @@ async function handlePin(interaction) {
   await interaction.editReply({
     content: [
       `**${user.Name}** — ${parts.join(', ')}.`,
-      `${result.total} coordinate(s) recorded out of **${known}** colonies he owns.`,
+      `${result.total} coordinate(s) recorded out of **${known}** colonies they own.`,
     ].join('\n'),
     allowedMentions: NO_PING,
   });
@@ -474,9 +474,11 @@ async function handleStop(interaction) {
   }
 
   store.remove(timer.key);
-  const item = ITEMS[timer.itemId];
+  // Un type retire du registre ne doit pas empecher d'arreter un timer en cours
+  // (meme regle que le scheduler) : on lui donne un libelle de repli.
+  const item = ITEMS[timer.itemId] ?? fallbackItem(timer);
   await interaction.reply({
-    content: `**${displayNameOf(interaction)}** stopped ${timerLabel(item, timer.name)}.`,
+    content: `**${displayNameOf(interaction)}** stopped ${timerLabel(timer, item)}.`,
     allowedMentions: NO_PING,
   });
 }
@@ -496,10 +498,10 @@ export async function handleAutocomplete(interaction) {
   const mine = store.forUser(interaction.user.id, interaction.guildId);
 
   const choices = mine.map((timer) => {
-    const item = ITEMS[timer.itemId];
+    const item = ITEMS[timer.itemId] ?? fallbackItem(timer);
     const left = formatDuration(timer.expiresAt - Date.now());
     return {
-      name: `${timerLabel(item, timer.name)} — ${left} left${timer.repeat ? ' (repeat)' : ''}`,
+      name: `${timerLabel(timer, item)} — ${left} left${timer.repeat ? ' (repeat)' : ''}`,
       value: timer.key,
     };
   });

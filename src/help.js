@@ -42,8 +42,11 @@ export function helpText() {
     'Naming a timer lets several run side by side: `/wars player:John` and',
     '`/wars player:Mike` are two separate timers.',
     'Durations accept `1h30`, `90m`, `2d`, `35h`.',
+    'Add `repeat:True` to any of them and it relaunches itself on each reset.',
     '',
-    '`/timers` — everything you have running, with a **Stop** button on each.',
+    '**Managing them**',
+    '`/timers` — everything you have running.',
+    '`/stop <timer>` — stop one. The list only ever shows your own.',
     '',
     '**Intel** — public Galaxy Life data, tracked over time',
     '`/scout <player>` — level, planets, HQ levels, attack record, and what',
@@ -52,8 +55,11 @@ export function helpText() {
     'Scouting also starts tracking that player: snapshots are taken hourly and',
     'only changes are kept, so a later /scout shows what moved since.',
     '',
-    'Every timer message carries buttons: **Restart**, **Repeat** (relaunch itself',
-    'on each reset) and **Stop**. Only the owner of a timer can press them.',
+    '**Coordinates** — where players actually are, which the game API never gives',
+    '`/find <player>` — every colony coordinate known for them.',
+    '`/map <alliance>` — the same for a whole alliance, member by member.',
+    '`/pin <player> <coords>` — add coordinates you saw yourself, e.g.',
+    '`/pin player:John coords:512,340 601,299`. Yours win over the scanned map.',
   );
 
   return lines.join('\n');

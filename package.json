@@ -15,7 +15,8 @@
     "describe": "node scripts/describe.mjs",
     "migrate": "node scripts/migrate.mjs",
     "whereami": "node scripts/whereami.mjs",
-    "emojis": "node scripts/emojis.mjs"
+    "emojis": "node scripts/emojis.mjs",
+    "check": "node test/commands.mjs"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
