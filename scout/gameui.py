@@ -163,6 +163,22 @@ def check():
         ("bouton GO", COORD_GO_BUTTON, (60, 255, 90)),
         ("garage souris", MOUSE_PARK, (255, 220, 60)),
     ]
+
+    # La croix de fermeture se calcule depuis le cadre du popup : elle n'existe
+    # donc que si un popup est ouvert au moment du controle.
+    from popup import find_popup
+
+    box = find_popup(image)
+    if box:
+        x0, y0, x1, y1 = box
+        close = (
+            x0 + int((x1 - x0) * CLOSE_BUTTON["x"]),
+            y0 + int((y1 - y0) * CLOSE_BUTTON["y"]),
+        )
+        draw.rectangle([x0, y0, x1, y1], outline=(255, 0, 255), width=2)
+        draw.text((x0 + 6, y0 + 6), "cadre du popup detecte", fill=(255, 0, 255))
+        points.append(("croix de fermeture", close, (255, 0, 255)))
+
     for label, (x, y), colour in points:
         draw.ellipse([x - 14, y - 14, x + 14, y + 14], outline=colour, width=3)
         draw.line([x - 20, y, x + 20, y], fill=colour, width=1)
@@ -174,6 +190,13 @@ def check():
     image.save(out)
     print("Fenetre : {} ({}x{})".format(title, rect[2], rect[3]))
     print("Image de verification : {}".format(out))
+
+    if box:
+        print("Popup detecte : {} -> croix calculee en {}".format(box, close))
+    else:
+        print("\nAucun popup ouvert : la croix de fermeture n'a pas pu etre situee.")
+        print("Ouvre un systeme dans le jeu et relance pour la verifier aussi.")
+
     print("\nChaque cercle doit tomber sur l'element nomme. Si un seul est a")
     print("cote, ne lance pas le crawler : il taperait dans le vide.")
 
