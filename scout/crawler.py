@@ -63,25 +63,34 @@ def request_stop(*_):
 
 def load_config():
     config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    config.setdefault("step", 6)
     config.setdefault("origin", [0, 0])
+    # Ancien format : un pas unique. On le repartit sur les deux axes.
+    if "step" in config and "step_x" not in config:
+        config["step_x"] = config["step"]
+        config["step_y"] = max(1, round(config["step"] / 2.9))
+    config.setdefault("step_x", 5)
+    config.setdefault("step_y", 3)
     return config
 
 
-def positions(origin, step, limit=UNIVERSE_MAX):
+def positions(origin, step_x, step_y, limit=UNIVERSE_MAX):
     """Parcours ligne par ligne depuis l'origine.
+
+    Deux pas differents, parce que l'ecran est un rectangle : la zone de jeu
+    fait 1899x654, soit presque trois fois plus large que haute. Un pas unique
+    laisserait des trous en vertical ou gaspillerait du temps en horizontal.
 
     Les coordonnees du jeu ne descendent pas sous zero : on part de (0,0) et on
     monte. Un parcours en lignes couvre tout sans jamais revenir en arriere, ce
-    qui rend la reprise triviale — il suffit de retenir la derniere position.
+    qui rend la reprise triviale.
     """
     y = origin[1]
     while y <= limit:
         x = origin[0]
         while x <= limit:
             yield (x, y)
-            x += step
-        y += step
+            x += step_x
+        y += step_y
 
 
 def load_state():
@@ -201,7 +210,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config()
-    step = config["step"]
+    step_x, step_y = config["step_x"], config["step_y"]
     origin = tuple(config["origin"])
     timings = {
         "navigate": config["timing"].get("settle_ms", 900) / 1000,
@@ -217,19 +226,20 @@ def main():
     done = set(tuple(p) for p in state["done"])
 
     print("Base locale  : {}".format(store.summary()))
-    print("Parcours     : depuis {}, pas de {}".format(origin, step))
+    total = ((UNIVERSE_MAX // step_x) + 1) * ((UNIVERSE_MAX // step_y) + 1)
+    print("Parcours     : depuis {}, pas {} horizontal / {} vertical".format(
+        origin, step_x, step_y))
+    print("Total        : {} positions".format(total))
     print("Deja fait    : {} position(s)".format(len(done)))
     print("Mode         : {}".format(
         "capture ET lecture (lent)" if args.read else "capture seule (rapide)"))
 
     if args.dry_run:
         print("\n25 premieres positions :")
-        for index, position in enumerate(positions(origin, step)):
+        for index, position in enumerate(positions(origin, step_x, step_y)):
             if index >= 25:
                 break
             print("  {:>3}. {}".format(index + 1, position))
-        total = ((UNIVERSE_MAX // step) + 1) ** 2
-        print("\nTotal du parcours complet : {} positions".format(total))
         print("--dry-run : rien n'a ete clique.")
         return
 
@@ -250,9 +260,9 @@ def main():
     found = 0
     empty_streak = 0
 
-    log("--- debut de balayage, origine {} pas {} ---".format(origin, step))
+    log("--- debut, origine {} pas {}x{} ---".format(origin, step_x, step_y))
 
-    for position in positions(origin, step):
+    for position in positions(origin, step_x, step_y):
         if stop_requested:
             break
         if position in done:
