@@ -97,13 +97,26 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
 
 
-def build(only_failed=False):
+def build(only_failed=False, reset=False):
+    """Complete le dictionnaire des joueurs.
+
+    `reset` : reinterroge TOUS les couples, meme ceux deja faits. C'est ce
+    qu'il faut quand la reponse de l'API sert a quelque chose de nouveau — les
+    niveaux, par exemple, qui n'etaient pas conserves jusqu'ici. Rien n'est
+    efface : les pseudos deja connus restent, l'avancement est simplement
+    reecrit au fur et a mesure.
+    """
     names = set(load(ROSTER_FILE, []))
     levels = load(LEVELS_FILE, {})
     state = load(STATE_FILE, {"done": [], "failed": []})
     done, failed = set(state["done"]), set(state["failed"])
 
-    todo = sorted(failed) if only_failed else [p for p in pairs() if p not in done]
+    if reset:
+        todo = pairs()
+    elif only_failed:
+        todo = sorted(failed)
+    else:
+        todo = [p for p in pairs() if p not in done]
     if not todo:
         print("Rien a faire. {} pseudo(s) connus, {} couple(s) en echec.".format(
             len(names), len(failed)))
@@ -143,9 +156,12 @@ def build(only_failed=False):
                 print("  ... {}/{}  ~{:.0f} min restantes".format(
                     processed, len(todo), left))
 
-    save_roster(names)
+    # Les niveaux aussi : seules les sauvegardes intermediaires les gardaient,
+    # donc les derniers couples interroges les perdaient a l'arrivee.
+    save_roster(names, levels)
     save_state({"done": sorted(done), "failed": sorted(failed)})
-    print("\n{} pseudo(s) au dictionnaire".format(len(names)))
+    print("\n{} pseudo(s) au dictionnaire, {} avec niveau".format(
+        len(names), len(levels)))
     print("{} couple(s) en echec".format(len(failed)))
     if failed:
         print("Relance avec --retry pour les reprendre.")
@@ -157,6 +173,7 @@ def stats():
     print("pseudos connus     : {}".format(len(names)))
     print("couples interroges : {}/{}".format(len(state["done"]), len(pairs())))
     print("couples en echec   : {}".format(len(state["failed"])))
+    print("niveaux releves    : {}".format(len(load(LEVELS_FILE, {}))))
     if names:
         print("\nexemples : {}".format(", ".join(names[:8])))
 
@@ -164,9 +181,12 @@ def stats():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--stats", action="store_true")
-    parser.add_argument("--retry", action="store_true")
+    parser.add_argument("--retry", action="store_true",
+                        help="reprend uniquement les couples en echec")
+    parser.add_argument("--reset", action="store_true",
+                        help="reinterroge tous les couples, pour relever les niveaux")
     args = parser.parse_args()
     if args.stats:
         stats()
     else:
-        build(only_failed=args.retry)
+        build(only_failed=args.retry, reset=args.reset)
