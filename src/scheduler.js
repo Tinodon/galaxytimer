@@ -7,7 +7,7 @@
 
 import * as store from './store.js';
 import { ITEMS, fallbackItem } from './items.js';
-import { readyText, completedText, startedText, timerButtons } from './ui.js';
+import { readyText, completedText, startedText } from './ui.js';
 
 const TICK_MS = 10_000;
 
@@ -65,13 +65,8 @@ async function fire(client, record, now) {
 
   await closeLaunchMessage(channel, record, item, next);
 
-  // Le bouton porte l'etat du timer tel qu'il sera apres le ping : re-arme si
-  // repeat, sinon un timer inactif dont "Restart" repart de zero.
-  const buttons = timerButtons(next ?? { ...record, repeat: false }, { includeRestart: !next });
-
   await channel.send({
     content: readyText(record, item),
-    components: [buttons],
     allowedMentions: { users: [record.userId] },
   });
 }
@@ -96,8 +91,8 @@ async function closeLaunchMessage(channel, record, item, next) {
 
   const username = record.username ?? 'Timer';
   const payload = next
-    ? { content: startedText(next, item, username), components: [timerButtons(next)] }
-    : { content: completedText(record, item, username), components: [] };
+    ? { content: startedText(next, item, username) }
+    : { content: completedText(record, item, username) };
 
   await message.edit({ ...payload, allowedMentions: { parse: [] } }).catch((err) => {
     console.error(`[scheduler] could not update launch message ${record.messageId}:`, err.message);

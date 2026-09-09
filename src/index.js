@@ -5,12 +5,11 @@ import * as store from './store.js';
 import { ITEM_LIST } from './items.js';
 import * as scheduler from './scheduler.js';
 import * as intel from './intel.js';
-import { handleCommand } from './commands.js';
+import { handleAutocomplete, handleCommand } from './commands.js';
 import { loadEmojis } from './emoji.js';
 import { loadLibrary, librarySize } from './artwork.js';
 import { startHealthServer } from './health.js';
 import { registerGlobally, clearGuildCommands } from './register.js';
-import { handleButton } from './buttons.js';
 
 // Toute premiere ligne du journal : sans elle, un demarrage qui echoue tot ne
 // laisse aucune trace et l'hebergeur affiche des logs vides.
@@ -74,7 +73,7 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) return await handleCommand(interaction);
-    if (interaction.isButton()) return await handleButton(interaction);
+    if (interaction.isAutocomplete()) return await handleAutocomplete(interaction);
   } catch (err) {
     console.error('[bot] error while handling an interaction:', err);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {

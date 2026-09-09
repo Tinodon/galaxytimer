@@ -10,8 +10,8 @@
 import { SlashCommandBuilder } from 'discord.js';
 import * as store from './store.js';
 import { ITEMS, ITEM_LIST, slugify, timerLabel } from './items.js';
-import { parseDuration } from './duration.js';
-import { startedText, panelText, panelRows, timerButtons, artworkFor } from './ui.js';
+import { formatDuration, parseDuration } from './duration.js';
+import { startedText, panelText, artworkFor } from './ui.js';
 import { helpText } from './help.js';
 import * as api from './glapi.js';
 import * as intel from './intel.js';
@@ -50,14 +50,34 @@ function buildCommand(item) {
         .setRequired(false),
     );
   }
+  // Le repeat etait pilote par un bouton. Sans les boutons, il lui faut une
+  // option : sinon un timer recurrent devient impossible a demander.
+  command.addBooleanOption((o) =>
+    o
+      .setName('repeat')
+      .setDescription('Restart this timer automatically on every reset')
+      .setRequired(false),
+  );
   return command.toJSON();
 }
 
 export const definitions = [
   ...ITEM_LIST.map(buildCommand),
   new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('Stop a timer you have running')
+    .addStringOption((o) =>
+      o
+        .setName('timer')
+        .setDescription('Which one — the list shows only yours')
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .toJSON(),
+
+  new SlashCommandBuilder()
     .setName('timers')
-    .setDescription('Your active timers, with their Stop buttons')
+    .setDescription('Your active timers')
     .toJSON(),
   new SlashCommandBuilder()
     .setName('scout')
@@ -141,7 +161,6 @@ export function buildPanel(userId, guildId, username) {
   const timers = store.forUser(userId, guildId);
   return {
     content: panelText(timers, ITEMS, username),
-    components: panelRows(timers, ITEMS),
     allowedMentions: NO_PING,
   };
 }
@@ -153,7 +172,6 @@ export function startedMessage(record, item, username) {
   return {
     // Une URL d'image seule sur sa ligne : Discord la deplie en apercu.
     content: url ? [text, url].join('\n') : text,
-    components: [timerButtons(record)],
     files: file ? [file] : [],
     allowedMentions: NO_PING,
   };
@@ -420,8 +438,74 @@ async function handleHelp(interaction) {
   await interaction.reply({ content: helpText(), allowedMentions: NO_PING });
 }
 
+/** Arrete un timer. Remplace le bouton Stop, retire a la demande de Noe. */
+async function handleStop(interaction) {
+  const choice = interaction.options.getString('timer');
+  const mine = store.forUser(interaction.user.id, interaction.guildId);
+
+  if (choice === '__all__') {
+    mine.forEach((t) => store.remove(t.key));
+    await interaction.reply({
+      content: mine.length
+        ? `**${displayNameOf(interaction)}** stopped ${mine.length} timer(s).`
+        : 'You had no timers running.',
+      allowedMentions: NO_PING,
+    });
+    return;
+  }
+
+  const timer = mine.find((t) => t.key === choice);
+  if (!timer) {
+    await interaction.reply({
+      content: 'No such timer running. `/timers` lists yours.',
+      allowedMentions: NO_PING,
+    });
+    return;
+  }
+
+  store.remove(timer.key);
+  const item = ITEMS[timer.itemId];
+  await interaction.reply({
+    content: `**${displayNameOf(interaction)}** stopped ${timerLabel(item, timer.name)}.`,
+    allowedMentions: NO_PING,
+  });
+}
+
+/**
+ * Choix proposes pour /stop : uniquement les timers de celui qui tape, avec le
+ * temps restant. On ne fait pas saisir un nom d'item a la main — c'etait le
+ * defaut que les boutons evitaient, et il ne doit pas revenir avec eux.
+ */
+export async function handleAutocomplete(interaction) {
+  if (interaction.commandName !== 'stop') {
+    await interaction.respond([]);
+    return;
+  }
+
+  const typed = (interaction.options.getFocused() ?? '').toLowerCase();
+  const mine = store.forUser(interaction.user.id, interaction.guildId);
+
+  const choices = mine.map((timer) => {
+    const item = ITEMS[timer.itemId];
+    const left = formatDuration(timer.expiresAt - Date.now());
+    return {
+      name: `${timerLabel(item, timer.name)} — ${left} left${timer.repeat ? ' (repeat)' : ''}`,
+      value: timer.key,
+    };
+  });
+
+  if (mine.length > 1) {
+    choices.unshift({ name: `Stop all ${mine.length} timers`, value: '__all__' });
+  }
+
+  await interaction.respond(
+    choices.filter((c) => c.name.toLowerCase().includes(typed)).slice(0, 25),
+  );
+}
+
 export async function handleCommand(interaction) {
   if (interaction.commandName === 'timers') return handleTimers(interaction);
+  if (interaction.commandName === 'stop') return handleStop(interaction);
   if (interaction.commandName === 'glhelp') return handleHelp(interaction);
   if (interaction.commandName === 'scout') return handleScout(interaction);
   if (interaction.commandName === 'alliance') return handleAlliance(interaction);

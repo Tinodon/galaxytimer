@@ -53,11 +53,19 @@ jamais par la couleur. Verrouille par une assertion.
 Tout message doit porter `allowedMentions` : `{ parse: [] }` partout sauf le
 ping, qui mentionne uniquement son proprietaire.
 
-## Surface de commandes : la garder minimale
+## Surface de commandes : tout par commande, aucun bouton
 
-Deux commandes (`/timer`, `/timers`), tout le reste au bouton. Avant d'ajouter
-une commande, verifier qu'un bouton ne ferait pas mieux : un bouton est a un
-clic et ne peut pas se tromper de nom d'item.
+**Il n'y a plus de boutons.** Retires a la demande de Noe : retrouver le message
+d'un timer dans l'historique du salon pour cliquer "Relancer" prend plus de
+temps que de retaper `/starbattery`. Ne pas les reintroduire.
+
+Leurs deux roles sont devenus des commandes, et doivent le rester :
+- arreter un timer -> `/stop`, avec autocompletion sur les timers de celui qui
+  tape (jamais un nom d'item a saisir a la main) ;
+- rendre un timer recurrent -> option `repeat` sur chaque commande de timer.
+
+Un test verifie que ces deux chemins existent : sans eux, un timer devient
+impossible a arreter ou a rendre recurrent.
 
 La seule raison de garder `/timers` plutot que de tout mettre sur le message du
 timer : le message se perd dans l'historique du salon au bout de quelques

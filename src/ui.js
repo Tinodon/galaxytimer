@@ -1,12 +1,17 @@
 // Construction des messages et des boutons.
 //
-// Style "Mudae" : texte brut, pas d'embed, rien d'ephemere. Les emojis custom
+// Style "Mudae" : texte brut, pas d'embed, rien d'ephemere, AUCUN bouton.
+//
+// Les boutons ont ete retires a la demande de Noe : retrouver le message d'un
+// timer dans l'historique pour cliquer "Relancer" prend plus de temps que de
+// retaper /starbattery. Leurs deux fonctions sont devenues des commandes —
+// /stop, et une option `repeat` sur chaque commande de timer. Les emojis custom
 // s'affichent inline dans le texte et l'image de l'item est une piece jointe —
 // aucun embed n'est necessaire pour montrer une image.
 //
 // Textes en anglais : c'est la langue du jeu et celle du bot.
 
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
+import { AttachmentBuilder } from 'discord.js';
 import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { formatDuration, discordRelative, discordAbsolute } from './duration.js';
@@ -26,27 +31,6 @@ export const PANEL_MAX_ROWS = 5;
 export const PANEL_ROOMY_MAX = 5;
 export const PANEL_STOPPABLE_MAX = PANEL_MAX_ROWS * 5;
 
-// Tous les boutons en gris. Discord n'expose que 4 styles imposes (bleu, gris,
-// vert, rouge) et aucun moyen de colorer le texte : le gris est le seul neutre.
-// Le rouge vif de Danger et le vert de Success agressaient l'oeil pour un bot
-// consulte vingt fois par jour. Les emojis portent la distinction.
-const NEUTRAL = ButtonStyle.Secondary;
-
-/**
- * Encode une action de bouton : `gt|action|source|cle`.
- * `source` vaut 'm' (message de timer) ou 'p' (panneau /timers) : apres
- * l'action on rafraichit le panneau au lieu de la rangee isolee. Separateur `|`
- * car les cles de timer contiennent des `:`.
- */
-export function buttonId(action, source, key) {
-  return `gt|${action}|${source}|${key}`;
-}
-
-export function parseButtonId(customId) {
-  const [ns, action, source, ...rest] = customId.split('|');
-  if (ns !== 'gt') return null;
-  return { action, source, key: rest.join('|') };
-}
 
 /**
  * Piece jointe du message de lancement.
@@ -130,76 +114,4 @@ export function panelText(timers, itemsById, username) {
     lines.push(`_Only the first ${PANEL_STOPPABLE_MAX} can be stopped here (Discord limit)._`);
   }
   return [`**${username}**, your active timers:`, ...lines].join('\n');
-}
-
-/** Boutons attaches au message d'un timer (source 'm'). */
-export function timerButtons(timer, { includeRestart = false } = {}) {
-  const row = new ActionRowBuilder();
-  if (includeRestart) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(buttonId('restart', 'm', timer.key))
-        .setLabel('Restart')
-        .setEmoji('🔄')
-        .setStyle(NEUTRAL),
-    );
-  }
-  row.addComponents(
-    new ButtonBuilder()
-      .setCustomId(buttonId('repeat', 'm', timer.key))
-      // L'etat ON/OFF se lit dans le libelle : pas besoin d'une couleur pour ca.
-      .setLabel(timer.repeat ? 'Repeat: ON' : 'Repeat: OFF')
-      .setEmoji('🔁')
-      .setStyle(NEUTRAL),
-    new ButtonBuilder()
-      .setCustomId(buttonId('stop', 'm', timer.key))
-      .setLabel('Stop')
-      .setEmoji('🛑')
-      .setStyle(NEUTRAL),
-  );
-  return row;
-}
-
-/**
- * Rangees du panneau /timers : une par timer, avec le nom de l'item sur le
- * bouton Stop pour qu'on sache lequel on arrete sans compter les lignes.
- */
-export function panelRows(timers, itemsById) {
-  const roomy = timers.length <= PANEL_ROOMY_MAX;
-  const shown = timers.slice(0, roomy ? PANEL_ROOMY_MAX : PANEL_STOPPABLE_MAX);
-
-  const stopButton = (t) => {
-    const item = itemsById[t.itemId];
-    const label = item ? timerLabel(t, item) : t.itemId;
-    return new ButtonBuilder()
-      .setCustomId(buttonId('stop', 'p', t.key))
-      .setLabel(truncateLabel(roomy ? `Stop ${label}` : label))
-      .setEmoji(item ? buttonEmojiFor(item) : '🛑')
-      .setStyle(NEUTRAL);
-  };
-
-  if (roomy) {
-    return shown.map((t) =>
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(buttonId('repeat', 'p', t.key))
-          .setLabel(t.repeat ? 'Repeat: ON' : 'Repeat: OFF')
-          .setEmoji('🔁')
-          .setStyle(NEUTRAL),
-        stopButton(t),
-      ),
-    );
-  }
-
-  // Mode compact : que des Stop, 5 par rangee.
-  const rows = [];
-  for (let i = 0; i < shown.length; i += 5) {
-    rows.push(new ActionRowBuilder().addComponents(shown.slice(i, i + 5).map(stopButton)));
-  }
-  return rows;
-}
-
-/** Discord refuse un libelle de bouton au-dela de 80 caracteres. */
-function truncateLabel(label) {
-  return label.length <= 80 ? label : `${label.slice(0, 79)}…`;
 }
