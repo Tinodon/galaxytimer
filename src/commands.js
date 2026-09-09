@@ -118,10 +118,6 @@ export const definitions = [
       o.setName('alliance').setDescription('Alliance name').setRequired(true))
     .toJSON(),
 
-  new SlashCommandBuilder()
-    .setName('watchlist')
-    .setDescription('Who this server is tracking')
-    .toJSON(),
 
   new SlashCommandBuilder()
     .setName('glhelp')
@@ -414,25 +410,6 @@ async function handleMap(interaction) {
   });
 }
 
-async function handleWatchlist(interaction) {
-  const { players, alliances } = intel.watchList(interaction.guildId);
-  if (!players.length && !alliances.length) {
-    await interaction.reply('Nothing tracked yet. Use `/scout` or `/alliance` to start.');
-    return;
-  }
-
-  const lines = [`**Tracked by this server**`];
-  if (players.length) {
-    lines.push(`Players (${players.length}/${MAX_WATCHED_PLAYERS}): ` +
-      players.map((p) => p.label).join(', '));
-  }
-  if (alliances.length) {
-    lines.push(`Alliances (${alliances.length}/${MAX_WATCHED_ALLIANCES}): ` +
-      alliances.map((a) => a.label).join(', '));
-  }
-  lines.push('', '_Snapshots are taken hourly. Only changes are stored._');
-  await interaction.reply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
-}
 
 async function handleHelp(interaction) {
   await interaction.reply({ content: helpText(), allowedMentions: NO_PING });
@@ -509,7 +486,6 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'glhelp') return handleHelp(interaction);
   if (interaction.commandName === 'scout') return handleScout(interaction);
   if (interaction.commandName === 'alliance') return handleAlliance(interaction);
-  if (interaction.commandName === 'watchlist') return handleWatchlist(interaction);
   if (interaction.commandName === 'pin') return handlePin(interaction);
   if (interaction.commandName === 'find') return handleFind(interaction);
   if (interaction.commandName === 'map') return handleMap(interaction);

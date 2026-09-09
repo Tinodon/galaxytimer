@@ -49,6 +49,66 @@ def canonical(name):
     return text
 
 
+# Couts de substitution. Remplacer un caractere par un autre ne coute pas
+# toujours pareil : les gabarits confondent en permanence 2 et Z, jamais A et W.
+# Une distance d'edition ordinaire, qui compte tout a 1, ne peut pas departager
+# deux joueurs reels a un caractere de la lecture — l'un obtenu par une
+# confusion que l'OCR commet vraiment, l'autre par un changement impossible.
+#
+# Idee de Noe : n'autoriser que les echanges de lettres que la lecture peut
+# reellement produire, et tomber ainsi sur le seul joueur existant plausible.
+CONFUSABLE = [
+    "0oOQD", "1lIiJ", "2Zz", "5Ss", "8B", "6Gb", "9gq", "uUvV",
+    "mnN", "rn", "cC", "eE", "tT", "yY", "xX", "kK", "wW", "AA4",
+]
+
+# Cout d'un echange entre caracteres visuellement proches. Assez bas pour que la
+# bonne correction gagne, assez haut pour qu'accumuler les corrections coute.
+CONFUSION_COST = 0.3
+
+
+def _build_costs():
+    costs = {}
+    for group in CONFUSABLE:
+        flat = [c.lower() for c in group]
+        for a in flat:
+            for b in flat:
+                if a != b:
+                    costs[(a, b)] = CONFUSION_COST
+    return costs
+
+
+SUBSTITUTION_COSTS = _build_costs()
+
+
+def substitution_cost(a, b):
+    if a == b:
+        return 0.0
+    return SUBSTITUTION_COSTS.get((a.lower(), b.lower()), 1.0)
+
+
+def weighted_distance(a, b):
+    """Distance d'edition ou les confusions de lecture coutent moins cher."""
+    if a == b:
+        return 0.0
+    if not a:
+        return float(len(b))
+    if not b:
+        return float(len(a))
+
+    previous = [float(i) for i in range(len(b) + 1)]
+    for i, ca in enumerate(a, start=1):
+        current = [float(i)]
+        for j, cb in enumerate(b, start=1):
+            current.append(min(
+                previous[j] + 1.0,
+                current[j - 1] + 1.0,
+                previous[j - 1] + substitution_cost(ca, cb),
+            ))
+        previous = current
+    return previous[-1]
+
+
 def distance(a, b):
     """Distance de Levenshtein, en gardant seulement deux lignes en memoire."""
     if a == b:

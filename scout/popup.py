@@ -99,6 +99,12 @@ def find_popup(image):
 # Corps de la vignette, sous la bande de nom, en fraction du popup.
 TILE = {"top_offset": 0.06, "height": 0.17, "width_ratio": 0.85}
 
+# Le niveau de QG : un chiffre seul, a droite du petit personnage. Bien plus
+# simple a lire qu'un pseudo — un seul caractere, uniquement des chiffres, a
+# position fixe. En dessous se trouve le niveau du JOUEUR, qu'on ne lit pas :
+# l'API le donne deja et de facon fiable.
+HQ_DIGIT = {"left": 0.085, "width": 0.042, "top": 0.155, "height": 0.055}
+
 # Une vignette occupee est magenta (bleu nettement au-dessus du vert), une
 # vignette libre est cyan (vert et bleu a egalite). Mesure sur capture reelle :
 # occupees entre -25 et -37, libres a -7. Le seuil est donc large.
@@ -132,6 +138,45 @@ def tile_state(popup, left, top):
     if arr.max(axis=2).mean() < TILE_DRAWN_MIN_BRIGHTNESS:
         return "vide"
     return "occupee" if green - blue < OCCUPIED_GREEN_BLUE_MAX else "libre"
+
+
+def read_hq_level(popup, left, top):
+    """Niveau de QG d'un emplacement, ou None si illisible.
+
+    Un chiffre de 1 a 9. On restreint Tesseract aux chiffres et on lui dit
+    qu'il n'y en a qu'un : c'est ce qui evite qu'il lise "4" comme "41".
+    """
+    width, height = popup.size
+    crop = popup.crop((
+        int((left + HQ_DIGIT["left"]) * width),
+        int((top + HQ_DIGIT["top"]) * height),
+        int((left + HQ_DIGIT["left"] + HQ_DIGIT["width"]) * width),
+        int((top + HQ_DIGIT["top"] + HQ_DIGIT["height"]) * height),
+    ))
+    if crop.width < 3 or crop.height < 3:
+        return None
+
+    # Seuil calcule sur la vignette elle-meme. Le jeu ecrit ce chiffre en blanc
+    # sur une tuile active et en gris pale sur une tuile grisee : un seuil fixe
+    # regle pour l'une efface completement l'autre.
+    from glyphs import otsu_threshold
+
+    grey = crop.convert("L")
+    base = otsu_threshold(np.array(grey).astype(int))
+
+    for scale in (6, 10):
+        for offset in (0, -20, 20):
+            enlarged = grey.resize((grey.width * scale, grey.height * scale),
+                                   Image.LANCZOS)
+            binary = ImageOps.invert(
+                enlarged.point(lambda p: 255 if p > base + offset else 0))
+            text = pytesseract.image_to_string(
+                binary,
+                config="--psm 10 -c tessedit_char_whitelist=123456789",
+            ).strip()
+            if len(text) == 1 and text.isdigit():
+                return int(text)
+    return None
 
 
 def is_occupied(popup, left, top):
@@ -270,7 +315,11 @@ def read_popup(image, debug_dir=None, expected=None, tolerance=12):
                 crop.save(Path(debug_dir) / "nom_r{}c{}.png".format(row, col))
 
             name = best_read(crop, 6, (110, 140, 170, 200), whitelist=NAME_CHARS)
-            players.append({"slot": slot, "name": name})
+            players.append({
+                "slot": slot,
+                "name": name,
+                "hq": read_hq_level(popup, left, top),
+            })
 
     return {
         "coords": coords,
