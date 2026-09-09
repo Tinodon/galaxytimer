@@ -1,12 +1,12 @@
 {
   "_comment": "Reglages du balayage. Modifiables sans toucher au code.",
-
-  "origin": [700, 860],
-  "_origin": "Point de depart du parcours en spirale. Mets tes propres coordonnees : la carte proche est la seule immediatement utile, la distance comptant pour attaquer.",
-
+  "origin": [
+    0,
+    0
+  ],
+  "_origin": "Point de depart. Les coordonnees du jeu ne descendent pas sous zero, donc (0,0) est le coin de l'univers. Parcours ligne par ligne, jamais de retour en arriere.",
   "step": 6,
   "_step": "Pas de deplacement. 8 est le maximum sans trou entre deux ecrans ; 6 laisse un quart de marge de securite. Plus petit = plus sur mais plus long : 5 fait 79000 ecrans contre 55000 a 6.",
-
   "timing": {
     "settle_ms": 900,
     "popup_ms": 700,
@@ -14,10 +14,9 @@
     "jitter_ms": 400,
     "_comment": "Attentes apres navigation, ouverture et fermeture d'un popup. jitter s'y ajoute au hasard. A augmenter si le jeu rame : un popup pas encore affiche est un systeme perdu."
   },
-
   "session": {
-    "max_minutes": 60,
-    "max_screens": 500,
-    "_comment": "Bornes dures. Un script sans limite finit par tourner la nuit entiere sur un ecran d'erreur en croyant travailler."
+    "max_minutes": 0,
+    "max_screens": 0,
+    "_comment": "0 = sans limite. Le balayage tourne jusqu'a Ctrl+C. Mettre une valeur pour un test court."
   }
 }

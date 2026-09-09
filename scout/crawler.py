@@ -1,24 +1,23 @@
 """Balayage automatique de la carte Galaxy Life.
 
-Pour chaque position de la grille : ecrire les coordonnees, valider, capturer,
-reperer les systemes, ouvrir chacun, lire ses joueurs, refermer, passer au
-suivant.
+Pour chaque position : ecrire les coordonnees, valider, capturer la carte,
+reperer les systemes, ouvrir chacun, capturer son popup, refermer, position
+suivante.
 
-    python scout/crawler.py --dry-run     ne clique nulle part, montre le plan
-    python scout/crawler.py --one         une seule position, pour verifier
-    python scout/crawler.py               balayage complet
-    python scout/crawler.py --resume      reprend ou le dernier s'est arrete
+    python scout/crawler.py --dry-run   montre le plan, ne clique nulle part
+    python scout/crawler.py --one       une seule position, pour verifier
+    python scout/crawler.py             balayage, jusqu'a Ctrl+C
 
-ECHAP interrompt proprement a tout moment : le fichier de systemes est ecrit au
-fil de l'eau, rien n'est perdu.
+PAR DEFAUT LE CRAWLER NE LIT RIEN. Il capture et il range. Lire un popup coute
+environ cinq secondes de calcul, soit une minute par ecran : une nuit entiere
+n'en couvrirait que 480. Sans lecture, un popup tombe a une seconde et demie et
+la meme nuit en couvre 1600. Les images sont traitees ensuite, par
+scout/process.py, pendant que la machine ne joue pas.
 
-Trois garde-fous, parce qu'un automate qui derape sans surveillance fait des
-degats silencieux :
-  - la zone de clic exclut les barres du jeu (voir scout/systems.py) ;
-  - apres chaque clic, on verifie qu'un popup s'est bien ouvert, et apres
-    fermeture qu'il a bien disparu ;
-  - les coordonnees lues sont confrontees a la position ou l'on a navigue :
-    une lecture aberrante est refusee plutot qu'enregistree.
+    python scout/crawler.py --read      lit pendant le balayage (lent)
+
+Ctrl+C interrompt proprement : l'etat et les fichiers sont ecrits au fil de
+l'eau, et la position en cours est terminee avant l'arret.
 """
 
 from __future__ import annotations
@@ -26,78 +25,63 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
-
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import keyboard  # noqa: E402
-
-from gameui import GameWindow, MOUSE_PARK  # noqa: E402
+from gameui import GameWindow, find_game_window  # noqa: E402
 from popup import find_popup, read_popup  # noqa: E402
 from store import SystemStore  # noqa: E402
-from systems import find_systems  # noqa: E402
+from systems import find_systems, safe_box  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.json"
-STATE_FILE = BASE_DIR / "data" / "crawl_state.json"
+DATA_DIR = BASE_DIR / "data"
+STATE_FILE = DATA_DIR / "crawl_state.json"
+LOG_FILE = DATA_DIR / "releve.txt"
+MAPS_DIR = DATA_DIR / "cartes"
+POPUPS_DIR = DATA_DIR / "popups"
 
 UNIVERSE_MAX = 1408
 
 stop_requested = False
 
 
-def request_stop():
+def request_stop(*_):
+    """Ctrl+C : on note la demande, on ne coupe pas au milieu d'un clic."""
     global stop_requested
-    if not stop_requested:
-        stop_requested = True
-        print("\n[!] Arret demande — on termine le systeme en cours.")
+    if stop_requested:
+        print("\n[!] Deuxieme interruption — arret immediat.")
+        sys.exit(1)
+    stop_requested = True
+    print("\n[!] Arret demande. On termine la position en cours puis on s'arrete.")
 
 
 def load_config():
     config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     config.setdefault("step", 6)
-    config.setdefault("origin", [700, 860])
+    config.setdefault("origin", [0, 0])
     return config
 
 
-def spiral(origin, step, limit=UNIVERSE_MAX):
-    """Positions a visiter, en spirale depuis l'origine.
+def positions(origin, step, limit=UNIVERSE_MAX):
+    """Parcours ligne par ligne depuis l'origine.
 
-    En spirale et non en lignes : dans ce jeu la distance compte pour attaquer,
-    donc la carte proche est la seule immediatement utile. Un balayage ligne par
-    ligne depuis (0,0) mettrait des jours avant d'atteindre quoi que ce soit
-    d'exploitable.
+    Les coordonnees du jeu ne descendent pas sous zero : on part de (0,0) et on
+    monte. Un parcours en lignes couvre tout sans jamais revenir en arriere, ce
+    qui rend la reprise triviale — il suffit de retenir la derniere position.
     """
-    x, y = origin
-    yield (x, y)
-
-    ring = 1
-    while True:
-        exhausted = True
-        for dx, dy in _ring_offsets(ring):
-            nx, ny = x + dx * step, y + dy * step
-            if 0 <= nx <= limit and 0 <= ny <= limit:
-                exhausted = False
-                yield (nx, ny)
-        if exhausted:
-            return
-        ring += 1
-
-
-def _ring_offsets(ring):
-    """Cases du carre de rayon `ring`, dans l'ordre du parcours."""
-    for dx in range(-ring, ring + 1):
-        yield dx, -ring
-    for dy in range(-ring + 1, ring + 1):
-        yield ring, dy
-    for dx in range(ring - 1, -ring - 1, -1):
-        yield dx, ring
-    for dy in range(ring - 1, -ring, -1):
-        yield -ring, dy
+    y = origin[1]
+    while y <= limit:
+        x = origin[0]
+        while x <= limit:
+            yield (x, y)
+            x += step
+        y += step
 
 
 def load_state():
@@ -105,21 +89,45 @@ def load_state():
         try:
             return json.loads(STATE_FILE.read_text())
         except json.JSONDecodeError:
-            pass
-    return {"visited": []}
+            print("[etat] fichier illisible, on repart de l'origine")
+    return {"done": []}
 
 
-def save_state(visited):
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({"visited": sorted(visited)}))
+def save_state(done):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps({"done": sorted(done)}))
+
+
+def log(line):
+    """Journal lisible a l'oeil, en plus du JSONL.
+
+    Filet de securite demande par Noe : si le fichier structure devient
+    inexploitable, tout reste lisible ici.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG_FILE.open("a", encoding="utf-8") as handle:
+        handle.write("{}  {}\n".format(datetime.now().strftime("%H:%M:%S"), line))
 
 
 def wait(base, jitter):
     time.sleep(base + random.uniform(0, jitter))
 
 
-def read_system(game, target, position, timings, store, save_shots):
-    """Ouvre un systeme, lit son contenu, le referme. Renvoie un compte-rendu."""
+def save_map(image, position):
+    """Carte VIERGE, sans annotation : c'est la matiere de la carte interactive.
+
+    En JPEG et rognee a la zone de jeu : en PNG plein ecran, une nuit de
+    balayage pese des dizaines de gigaoctets pour rien.
+    """
+    MAPS_DIR.mkdir(parents=True, exist_ok=True)
+    x0, y0, x1, y1 = safe_box(image.width, image.height)
+    path = MAPS_DIR / "{}_{}.jpg".format(position[0], position[1])
+    image.crop((x0, y0, x1, y1)).save(path, "JPEG", quality=80)
+    return path
+
+
+def visit_system(game, target, position, timings, store, do_read):
+    """Ouvre un systeme, capture son popup, referme. Lit seulement si demande."""
     game.click(target["x"], target["y"], settle=0)
     wait(timings["popup"], timings["jitter"])
 
@@ -128,49 +136,50 @@ def read_system(game, target, position, timings, store, save_shots):
     if not box:
         # Le clic n'a rien ouvert : espace vide, ou le jeu a rame. On n'insiste
         # pas, le systeme sera revu depuis l'ecran voisin.
-        return {"status": "pas de popup"}
+        return {"status": "rien"}
 
-    result = read_popup(image, expected=position)
+    # La capture du popup est gardee dans tous les cas : c'est elle qui permet
+    # de retraiter plus tard sans rejouer le balayage.
+    POPUPS_DIR.mkdir(parents=True, exist_ok=True)
+    shot = POPUPS_DIR / "{}_{}_{}_{}.jpg".format(
+        position[0], position[1], target["x"], target["y"])
+    image.crop(box).save(shot, "JPEG", quality=85)
 
     # Fermeture AVANT tout traitement : tant que le popup est ouvert, le clic
     # suivant tomberait dedans.
     game.close_popup(box, settle=timings["close"])
-    after = game.capture()
-    if find_popup(after):
-        # Deuxieme tentative : la croix a pu manquer si le popup s'anime encore.
-        game.close_popup(find_popup(after), settle=timings["close"] * 2)
+    if find_popup(game.capture()):
+        again = find_popup(game.capture())
+        if again:
+            game.close_popup(again, settle=timings["close"] * 2)
         if find_popup(game.capture()):
             return {"status": "popup bloque"}
 
+    if not do_read:
+        return {"status": "capture", "file": shot.name}
+
+    result = read_popup(image, expected=position)
     if not result or not result["coords"]:
         return {"status": "coordonnees illisibles"}
 
     x, y = result["coords"]
+    players = [p["name"] for p in result["players"] if p["name"]]
     if store.has(x, y):
         return {"status": "deja vu", "coords": (x, y), "name": result["name"]}
 
-    players = [p["name"] for p in result["players"] if p["name"]]
     store.record(x, y, result["name"], players, screen=position)
-
-    if save_shots:
-        shots = BASE_DIR / "captures" / "popups"
-        shots.mkdir(parents=True, exist_ok=True)
-        image.crop(box).save(shots / "{}_{}.png".format(x, y))
-
     return {"status": "nouveau", "coords": (x, y), "name": result["name"],
             "players": players}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true",
-                        help="ne clique nulle part, affiche seulement le plan")
-    parser.add_argument("--one", action="store_true",
-                        help="une seule position, pour verifier que tout marche")
-    parser.add_argument("--resume", action="store_true",
-                        help="reprend en sautant les positions deja faites")
-    parser.add_argument("--save-shots", action="store_true",
-                        help="garde une image de chaque popup lu")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--one", action="store_true")
+    parser.add_argument("--read", action="store_true",
+                        help="lit les popups pendant le balayage (cinq fois plus lent)")
+    parser.add_argument("--restart", action="store_true",
+                        help="reprend depuis l'origine au lieu de continuer")
     args = parser.parse_args()
 
     config = load_config()
@@ -182,81 +191,115 @@ def main():
         "close": config["timing"].get("close_ms", 400) / 1000,
         "jitter": config["timing"].get("jitter_ms", 400) / 1000,
     }
-    max_seconds = config["session"]["max_minutes"] * 60
-    max_screens = config["session"].get("max_screens", 500)
 
     store = SystemStore()
-    state = load_state() if args.resume else {"visited": []}
-    visited = set(tuple(v) for v in state["visited"])
+    state = {"done": []} if args.restart else load_state()
+    done = set(tuple(p) for p in state["done"])
 
-    print("Base locale : {}".format(store.summary()))
-    print("Origine {}, pas de {}, {} position(s) deja faite(s)".format(
-        origin, step, len(visited)))
+    print("Base locale  : {}".format(store.summary()))
+    print("Parcours     : depuis {}, pas de {}".format(origin, step))
+    print("Deja fait    : {} position(s)".format(len(done)))
+    print("Mode         : {}".format(
+        "capture ET lecture (lent)" if args.read else "capture seule (rapide)"))
 
     if args.dry_run:
-        print("\nPremieres positions du parcours en spirale :")
-        for index, position in enumerate(spiral(origin, step)):
+        print("\n25 premieres positions :")
+        for index, position in enumerate(positions(origin, step)):
             if index >= 25:
                 break
             print("  {:>3}. {}".format(index + 1, position))
-        print("\n--dry-run : rien n'a ete clique.")
+        total = ((UNIVERSE_MAX // step) + 1) ** 2
+        print("\nTotal du parcours complet : {} positions".format(total))
+        print("--dry-run : rien n'a ete clique.")
         return
 
+    if not find_game_window():
+        raise SystemExit("Galaxy Life n'est pas ouvert.")
+
     game = GameWindow()
-    print("Fenetre : {} ({}x{})".format(game.title, game.rect[2], game.rect[3]))
-    print("\nECHAP pour arreter. Demarrage dans 5 secondes —")
-    print("mets Galaxy Life au premier plan, sur la vue carte.")
-    keyboard.on_press_key("esc", lambda _: request_stop())
+    print("Fenetre      : {} ({}x{})".format(game.title, game.rect[2], game.rect[3]))
+    print("\nCtrl+C pour arreter proprement.")
+    print("Demarrage dans 5 secondes — Galaxy Life au premier plan, vue carte.\n")
+
+    signal.signal(signal.SIGINT, request_stop)
     time.sleep(5)
 
     started = time.time()
     screens = 0
+    popups = 0
     found = 0
+    empty_streak = 0
 
-    for position in spiral(origin, step):
-        if stop_requested or screens >= max_screens:
+    log("--- debut de balayage, origine {} pas {} ---".format(origin, step))
+
+    for position in positions(origin, step):
+        if stop_requested:
             break
-        if time.time() - started > max_seconds:
-            print("[!] Duree maximale atteinte.")
-            break
-        if position in visited:
+        if position in done:
             continue
+
+        # Le jeu a pu etre ferme ou plante pendant la nuit : sans ce controle,
+        # le script continuerait a cliquer dans le vide jusqu'au matin.
+        if not find_game_window():
+            print("[!] La fenetre Galaxy Life a disparu. Arret.")
+            log("fenetre du jeu disparue, arret")
+            break
 
         game.go_to(position[0], position[1], settle=timings["navigate"])
         game.park_mouse()
         wait(0.2, timings["jitter"])
 
         image = game.capture()
+        save_map(image, position)
         targets = find_systems(image)
         screens += 1
-        print("\n[{}] {} systeme(s) a l'ecran".format(position, len(targets)))
+
+        if not targets:
+            empty_streak += 1
+        else:
+            empty_streak = 0
+
+        print("[{:>4},{:>4}] {} systeme(s)".format(position[0], position[1], len(targets)))
+        log("position {} : {} systeme(s)".format(position, len(targets)))
 
         for target in targets:
             if stop_requested:
                 break
-            report = read_system(game, target, position, timings, store, args.save_shots)
+            report = visit_system(game, target, position, timings, store, args.read)
+            popups += 1
 
             if report["status"] == "nouveau":
                 found += 1
-                print("  + {} {} — {}".format(
+                line = "  + {} {} — {}".format(
                     report["name"] or "?", report["coords"],
-                    ", ".join(report["players"]) or "aucun joueur"))
+                    ", ".join(report["players"]) or "aucun joueur")
             elif report["status"] == "deja vu":
-                print("  = {} {}".format(report["name"] or "?", report["coords"]))
+                line = "  = {} {}".format(report["name"] or "?", report["coords"])
+            elif report["status"] == "capture":
+                line = "  . {}".format(report["file"])
             else:
-                print("  ! {}".format(report["status"]))
+                line = "  ! {}".format(report["status"])
+            print(line)
+            log(line.strip())
 
-        visited.add(position)
-        save_state(visited)
+        done.add(position)
+        save_state(done)
 
         if args.one:
-            print("\n--one : une position traitee, on s'arrete.")
+            print("\n--one : une position traitee.")
             break
 
     elapsed = time.time() - started
-    print("\n{} ecran(s) en {:.0f} min, {} nouveau(x) systeme(s).".format(
-        screens, elapsed / 60, found))
+    summary = "{} ecran(s), {} popup(s), {} nouveau(x) systeme(s) en {:.0f} min".format(
+        screens, popups, found, elapsed / 60)
+    print("\n{}".format(summary))
     print(store.summary())
+    print("\nCartes  : {}".format(MAPS_DIR))
+    print("Popups  : {}".format(POPUPS_DIR))
+    print("Journal : {}".format(LOG_FILE))
+    if not args.read and popups:
+        print("\nPour lire les popups captures : python scout/process.py")
+    log("--- fin : {} ---".format(summary))
 
 
 if __name__ == "__main__":
