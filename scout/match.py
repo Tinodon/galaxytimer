@@ -38,6 +38,27 @@ MIN_SCORE = 0.72
 # l'un que l'autre de la lecture ne peuvent pas etre departages honnetement.
 MIN_MARGIN = 0.04
 
+# Le score seul ne suffit pas : il mesure la distance au voisin le plus proche,
+# jamais si la LECTURE valait quelque chose. Avec 482 776 noms, n'importe quel
+# charabia finit par avoir un voisin a 0.80 — c'est ainsi que `aoe__-oo`, qui
+# etait en realite `XNMY`, s'est vu attribuer `noe00`. Un faux positif est bien
+# pire qu'un refus : il envoie quelqu'un attaquer une base qui n'existe pas.
+#
+# Ces trois garde-fous portent sur la lecture elle-meme, pas sur sa distance.
+MIN_READ_LENGTH = 4          # en dessous, il n'y a pas de quoi identifier
+MIN_LENGTH_RATIO = 0.75      # une correction ne doit pas refaire le mot
+MAX_JUNK_RATIO = 0.25        # trop de signes = du bruit, pas un pseudo
+
+
+def reading_is_usable(reading):
+    """La lecture vaut-elle la peine d'etre rapprochee ? (motif du refus sinon)"""
+    flat = "".join(c for c in str(reading) if c.isalnum())
+    if len(flat) < MIN_READ_LENGTH:
+        return "lecture trop courte"
+    if len(reading) and sum(1 for c in reading if not c.isalnum()) / len(reading) > MAX_JUNK_RATIO:
+        return "lecture trop bruitee"
+    return None
+
 
 class Roster:
     """Le dictionnaire des joueurs, indexe pour la recherche approchee."""
@@ -68,7 +89,7 @@ class Roster:
             return {flat} if flat else set()
         return {flat[i:i + 2] for i in range(len(flat) - 1)}
 
-    def candidates(self, flat, max_candidates=400):
+    def candidates(self, flat, max_candidates=60):
         """Positions des noms partageant assez de bigrammes avec la lecture."""
         grams = self._bigrams(flat)
         if not grams:
@@ -82,7 +103,24 @@ class Roster:
         # Un nom doit partager au moins un tiers des bigrammes : en dessous, il
         # ne peut pas etre a distance d'edition raisonnable.
         floor = max(1, len(grams) // 3)
-        keep = [(count, position) for position, count in counts.items() if count >= floor]
+
+        # Filtre de longueur, avant tout calcul : un nom deux fois plus long que
+        # la lecture ne peut pas atteindre le score minimal, quelles que soient
+        # les substitutions. L'ecarter ici evite une distance d'edition complete
+        # pour rien — c'est ce qui rendait le rapprochement des 15 000 lectures
+        # interminable.
+        span = len(flat)
+        low_length = int(span * MIN_SCORE)
+        high_length = int(span / MIN_SCORE) + 1
+
+        keep = []
+        for position, count in counts.items():
+            if count < floor:
+                continue
+            if not (low_length <= len(self.canonical[position]) <= high_length):
+                continue
+            keep.append((count, position))
+
         keep.sort(reverse=True)
         return [position for _, position in keep[:max_candidates]]
 
@@ -95,6 +133,12 @@ class Roster:
         flat = canonical(reading)
         if not flat:
             return {"name": None, "score": 0.0, "reason": "lecture vide"}
+
+        # Une lecture inexploitable n'est pas rapprochee : mieux vaut ne rien
+        # dire que designer le premier voisin venu.
+        unusable = reading_is_usable(reading)
+        if unusable:
+            return {"name": None, "score": 0.0, "reason": unusable}
 
         if flat in self.exact:
             position = self.exact[flat]
@@ -120,6 +164,17 @@ class Roster:
         if len(scored) > 1 and best_score - scored[1][0] < MIN_MARGIN:
             return {"name": None, "score": round(best_score, 3), "reason": "ambigu",
                     "between": [self.names[best_position], self.names[scored[1][1]]]}
+
+        # Une correction qui change beaucoup la longueur ne corrige pas une
+        # faute de lecture : elle reecrit le mot. Les deux longueurs sont
+        # mesurees sous la meme forme, sans quoi un pseudo a tirets comme
+        # `lil_miss_seera` serait rejete a tort.
+        target = self.canonical[best_position]
+        ratio = min(len(flat), len(target)) / max(len(flat), len(target), 1)
+        if ratio < MIN_LENGTH_RATIO:
+            return {"name": None, "score": round(best_score, 3),
+                    "reason": "longueur trop differente",
+                    "closest": self.names[best_position]}
 
         return {"name": self.names[best_position], "score": round(best_score, 3),
                 "reason": "approche"}

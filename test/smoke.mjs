@@ -500,3 +500,19 @@ rmSync(DB, { force: true });
 rmSync(DB.replace(/\.json$/, '.intel.json'), { force: true });
 rmSync(ART_ROOT, { recursive: true, force: true });
 console.log(`\n${passed}/${passed} assertions passees.\n`);
+
+console.log('\n20. Carte du balayage : lecture et fusion avec /pin');
+{
+  const { flatten } = await import('../src/map.js');
+  // La normalisation doit etre IDENTIQUE des deux cotes : le balayage publie
+  // ses cles sous cette forme, le bot les cherche sous la meme. Une
+  // divergence rendrait toute la carte introuvable sans rien casser de
+  // visible.
+  check('normalisation insensible a la casse', () =>
+    assert.equal(flatten('IRaXeRI'), flatten('iraxeri')));
+  check('normalisation ignore les separateurs', () =>
+    assert.equal(flatten('lil_miss-seera'), 'lilmissseera'));
+  check('normalisation ignore les accents', () =>
+    assert.equal(flatten('Noé'), 'noe'));
+  check('pseudo vide ne casse rien', () => assert.equal(flatten(null), ''));
+}

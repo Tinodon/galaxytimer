@@ -17,6 +17,7 @@ import * as api from './glapi.js';
 import * as intel from './intel.js';
 import { playerReport, allianceReport, fit } from './intelview.js';
 import * as pins from './pins.js';
+import * as map from './map.js';
 import { discordRelative } from './duration.js';
 
 // Le message nomme son proprietaire mais ne doit pinger personne : seul le ping
@@ -347,9 +348,23 @@ async function handleFind(interaction) {
     return;
   }
 
-  const entry = pins.forPlayer(interaction.guildId, user.Id);
   const owned = user.Planets?.length ?? 0;
-  if (!entry?.coords.length) {
+
+  // Deux sources : le balayage automatique, et ce que les membres ont saisi a
+  // la main. La saisie manuelle prime — elle vient d'un joueur qui vient de
+  // regarder, le balayage d'une reconnaissance d'image datant de la veille.
+  const scanned = (await map.coloniesOf(user.Name).catch(() => null)) ?? [];
+  const pinned = pins.forPlayer(interaction.guildId, user.Id)?.coords ?? [];
+
+  const spots = new Map();
+  for (const spot of scanned) {
+    spots.set(`${spot.x},${spot.y}`, { ...spot, source: 'scan' });
+  }
+  for (const spot of pinned) {
+    spots.set(`${spot.x},${spot.y}`, { ...spot, source: 'pin' });
+  }
+
+  if (!spots.size) {
     await interaction.editReply(
       `**${user.Name}** owns **${owned}** colonies. None mapped yet — ` +
       `record what you see with \`/pin\`.`,
@@ -357,12 +372,18 @@ async function handleFind(interaction) {
     return;
   }
 
+  const found = [...spots.values()].sort((a, b) => a.x - b.x || a.y - b.y);
   const lines = [
     `**${user.Name}** — level ${user.Level} · ${user.AllianceId ?? 'no alliance'}`,
-    `**${entry.coords.length}/${owned}** colonies mapped`,
+    `**${found.length}/${owned}** colonies mapped`,
     '',
-    ...entry.coords.map(pinLine),
+    ...found.map((spot) => {
+      const hq = spot.hq ? `HQ ${spot.hq}` : 'HQ ?';
+      const mark = spot.source === 'pin' ? ' · pinned' : '';
+      return `\`${String(spot.x).padStart(4)},${String(spot.y).padStart(4)}\`  ${hq}${mark}`;
+    }),
   ];
+
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
 }
 
