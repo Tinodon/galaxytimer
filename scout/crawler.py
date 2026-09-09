@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gameui import GameWindow, find_game_window  # noqa: E402
-from popup import find_popup, read_popup  # noqa: E402
+from popup import find_popup, popup_ready, read_popup  # noqa: E402
 from store import SystemStore  # noqa: E402
 from systems import find_systems, safe_box  # noqa: E402
 
@@ -138,6 +138,24 @@ def visit_system(game, target, position, timings, store, do_read):
         # pas, le systeme sera revu depuis l'ecran voisin.
         return {"status": "rien"}
 
+    # Le cadre s'affiche avant son contenu. Capturer maintenant enregistrerait
+    # un systeme comme vide alors qu'il ne l'est pas — pire qu'une lecture
+    # ratee, puisque ca produit une donnee fausse qu'on croira bonne.
+    ready, drawn = popup_ready(image.crop(box))
+    attempts = 0
+    while not ready and attempts < timings["load_retries"]:
+        attempts += 1
+        time.sleep(timings["load_wait"])
+        image = game.capture()
+        box = find_popup(image)
+        if not box:
+            return {"status": "popup disparu pendant le chargement"}
+        ready, drawn = popup_ready(image.crop(box))
+
+    if not ready:
+        game.close_popup(box, settle=timings["close"])
+        return {"status": "popup incomplet ({}/12 vignettes)".format(drawn)}
+
     # La capture du popup est gardee dans tous les cas : c'est elle qui permet
     # de retraiter plus tard sans rejouer le balayage.
     POPUPS_DIR.mkdir(parents=True, exist_ok=True)
@@ -190,6 +208,8 @@ def main():
         "popup": config["timing"].get("popup_ms", 700) / 1000,
         "close": config["timing"].get("close_ms", 400) / 1000,
         "jitter": config["timing"].get("jitter_ms", 400) / 1000,
+        "load_wait": config["timing"].get("load_wait_ms", 5000) / 1000,
+        "load_retries": config["timing"].get("load_retries", 2),
     }
 
     store = SystemStore()

@@ -12,7 +12,9 @@
     "popup_ms": 700,
     "close_ms": 400,
     "jitter_ms": 400,
-    "_comment": "Attentes apres navigation, ouverture et fermeture d'un popup. jitter s'y ajoute au hasard. A augmenter si le jeu rame : un popup pas encore affiche est un systeme perdu."
+    "_comment": "Attentes apres navigation, ouverture et fermeture d'un popup. jitter s'y ajoute au hasard. load_wait_ms : pause quand un popup n'a pas fini de s'afficher, reessayee load_retries fois. Une pause de 0.3 s est ajoutee apres chaque action par le pilote (ACTION_PAUSE dans gameui.py).",
+    "load_wait_ms": 5000,
+    "load_retries": 2
   },
   "session": {
     "max_minutes": 0,

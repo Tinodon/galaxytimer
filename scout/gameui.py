@@ -33,6 +33,11 @@ COORD_GO_BUTTON = (708, 150)
 # l'ecarter par filtrage, on le sort simplement de la carte.
 MOUSE_PARK = (30, 250)
 
+# Pause ajoutee apres CHAQUE action. Le jeu est lourd : enchainer les clics
+# trop vite lui fait sauter des etapes, et on se retrouve avec un popup vide ou
+# une navigation qui n'a pas eu lieu.
+ACTION_PAUSE = 0.3
+
 # Croix de fermeture d'un popup, en pixels depuis le coin de la fenetre.
 # Mesuree sur capture reelle : le popup s'affiche toujours au meme endroit.
 POPUP_CLOSE = (1295, 350)
@@ -115,7 +120,7 @@ class GameWindow:
         import pyautogui
 
         pyautogui.click(*self.to_screen(x, y))
-        time.sleep(settle)
+        time.sleep(settle + ACTION_PAUSE)
 
     def park_mouse(self):
         import pyautogui
@@ -127,10 +132,12 @@ class GameWindow:
         import pyautogui
 
         pyautogui.click(*self.to_screen(*field))
-        time.sleep(0.12)
+        time.sleep(ACTION_PAUSE)
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("delete")
-        pyautogui.typewrite(str(value), interval=0.03)
+        time.sleep(ACTION_PAUSE)
+        pyautogui.typewrite(str(value), interval=0.05)
+        time.sleep(ACTION_PAUSE)
 
     def go_to(self, x, y, settle=1.0):
         """Ecrit les coordonnees et valide. Ne verifie pas le resultat."""

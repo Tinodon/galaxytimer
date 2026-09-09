@@ -105,12 +105,17 @@ TILE = {"top_offset": 0.06, "height": 0.17, "width_ratio": 0.85}
 OCCUPIED_GREEN_BLUE_MAX = -15
 
 
-def is_occupied(popup, left, top):
-    """Emplacement occupe ? Decide par la COULEUR de la vignette.
+# En dessous de cette luminosite, la vignette n'est pas encore dessinee : le
+# popup s'affiche avant son contenu.
+TILE_DRAWN_MIN_BRIGHTNESS = 62
 
-    Bien plus fiable que le texte : une case libre affiche "FREE PLANET" en
-    minuscule, que l'OCR rend en bouillie variable ("coce", "lepce"...) qu'on ne
-    peut pas filtrer par une liste de fautes.
+
+def tile_state(popup, left, top):
+    """'occupee', 'libre', ou 'vide' si la vignette n'est pas encore dessinee.
+
+    Decide par la COULEUR, bien plus fiable que le texte : une case libre
+    affiche "FREE PLANET" en minuscule, que l'OCR rend en bouillie variable
+    ("coce", "lepce"...) qu'aucune liste de fautes ne peut filtrer.
     """
     width, height = popup.size
     tile = popup.crop((
@@ -121,8 +126,42 @@ def is_occupied(popup, left, top):
     ))
     arr = np.array(tile.convert("RGB")).astype(int)
     if arr.size == 0:
-        return False
-    return arr[:, :, 1].mean() - arr[:, :, 2].mean() < OCCUPIED_GREEN_BLUE_MAX
+        return "vide"
+
+    green, blue = arr[:, :, 1].mean(), arr[:, :, 2].mean()
+    if arr.max(axis=2).mean() < TILE_DRAWN_MIN_BRIGHTNESS:
+        return "vide"
+    return "occupee" if green - blue < OCCUPIED_GREEN_BLUE_MAX else "libre"
+
+
+def is_occupied(popup, left, top):
+    return tile_state(popup, left, top) == "occupee"
+
+
+def slot_positions():
+    """Les 12 emplacements, en fractions du popup."""
+    for row in range(GRID["rows"]):
+        for col in range(GRID["columns"]):
+            yield (
+                row * GRID["columns"] + col,
+                GRID["first_left"] + col * GRID["col_pitch"],
+                GRID["name_top"] + row * GRID["row_pitch"],
+            )
+
+
+def popup_ready(popup):
+    """Le popup a-t-il fini de s'afficher ?
+
+    Un popup complet montre douze vignettes, chacune clairement occupee ou
+    libre. Pendant le chargement, le cadre est deja la mais les vignettes sont
+    encore sombres. Lire a ce moment-la enregistrerait un systeme comme vide
+    alors qu'il ne l'est pas — une erreur bien pire qu'une lecture ratee.
+    """
+    drawn = sum(
+        1 for _, left, top in slot_positions()
+        if tile_state(popup, left, top) != "vide"
+    )
+    return drawn >= GRID["columns"] * GRID["rows"], drawn
 
 
 def ocr(image, scale, threshold, psm=7, whitelist=None):
