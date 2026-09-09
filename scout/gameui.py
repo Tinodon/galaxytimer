@@ -78,6 +78,27 @@ def find_game_window():
     return found[0] if found else None
 
 
+def foreground_title():
+    """Titre de la fenetre au premier plan."""
+    handle = user32.GetForegroundWindow()
+    length = user32.GetWindowTextLengthW(handle)
+    if not length:
+        return ""
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(handle, buffer, length + 1)
+    return buffer.value or ""
+
+
+def is_game_focused():
+    """Galaxy Life est-il la fenetre active ?
+
+    Verifier que la fenetre EXISTE ne suffit pas : si une autre application
+    prend le focus pendant la nuit, les clics partiraient dedans. On veut savoir
+    que le jeu est bien devant avant de toucher a la souris.
+    """
+    return GAME_TITLE in foreground_title().lower()
+
+
 def grab(rect):
     left, top, width, height = rect
     with mss.mss() as sct:

@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from gameui import GameWindow, find_game_window  # noqa: E402
+from gameui import GameWindow, find_game_window, is_game_focused  # noqa: E402
 from popup import find_popup, popup_ready, read_popup  # noqa: E402
 from store import SystemStore  # noqa: E402
 from systems import find_systems, safe_box  # noqa: E402
@@ -137,6 +137,11 @@ def save_map(image, position):
 
 def visit_system(game, target, position, timings, store, do_read):
     """Ouvre un systeme, capture son popup, referme. Lit seulement si demande."""
+    # Dernier controle avant de toucher a la souris : si le jeu n'est plus
+    # devant, le clic partirait dans une autre application.
+    if not is_game_focused():
+        return {"status": "focus perdu"}
+
     game.click(target["x"], target["y"], settle=0)
     wait(timings["popup"], timings["jitter"])
 
@@ -203,6 +208,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--one", action="store_true")
+    parser.add_argument("--test", action="store_true",
+                        help="trois positions : sur place, un pas a droite, un pas en bas")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="s'arrete apres ce nombre de positions")
     parser.add_argument("--read", action="store_true",
                         help="lit les popups pendant le balayage (cinq fois plus lent)")
     parser.add_argument("--restart", action="store_true",
@@ -262,17 +271,39 @@ def main():
 
     log("--- debut, origine {} pas {}x{} ---".format(origin, step_x, step_y))
 
-    for position in positions(origin, step_x, step_y):
+    # --test : on verifie les deux sens de deplacement d'affilee, ce que le
+    # parcours normal ne ferait qu'apres avoir traverse toute une ligne.
+    if args.test:
+        plan = [
+            origin,
+            (origin[0] + step_x, origin[1]),
+            (origin[0], origin[1] + step_y),
+        ]
+        print("Test : {} -> un pas a droite -> un pas en haut\n".format(origin))
+    else:
+        plan = positions(origin, step_x, step_y)
+
+    for position in plan:
         if stop_requested:
             break
-        if position in done:
+        if args.limit and screens >= args.limit:
+            print("\n--limit {} atteint.".format(args.limit))
+            break
+        # En mode test on refait les positions meme si elles sont deja notees :
+        # c'est un controle du pilotage, pas une collecte.
+        if position in done and not args.test:
             continue
 
-        # Le jeu a pu etre ferme ou plante pendant la nuit : sans ce controle,
-        # le script continuerait a cliquer dans le vide jusqu'au matin.
+        # Le jeu a pu etre ferme, plante, ou passer en arriere-plan pendant la
+        # nuit. Sans ce controle, le script continuerait a cliquer — au mieux
+        # dans le vide, au pire dans une autre application.
         if not find_game_window():
             print("[!] La fenetre Galaxy Life a disparu. Arret.")
             log("fenetre du jeu disparue, arret")
+            break
+        if not is_game_focused():
+            print("[!] Galaxy Life n'est plus au premier plan. Arret.")
+            log("focus perdu, arret")
             break
 
         game.go_to(position[0], position[1], settle=timings["navigate"])
@@ -296,6 +327,11 @@ def main():
             if stop_requested:
                 break
             report = visit_system(game, target, position, timings, store, args.read)
+            if report["status"] == "focus perdu":
+                print("  [!] Galaxy Life n'est plus au premier plan. Arret.")
+                log("focus perdu pendant un clic, arret")
+                request_stop()
+                break
             popups += 1
 
             if report["status"] == "nouveau":
