@@ -33,8 +33,13 @@ COORD_GO_BUTTON = (708, 150)
 # l'ecarter par filtrage, on le sort simplement de la carte.
 MOUSE_PARK = (30, 250)
 
-# Le bouton de fermeture d'un popup, en fraction du cadre detecte. Il suit donc
-# le popup si celui-ci change de taille ou de place.
+# Croix de fermeture d'un popup, en pixels depuis le coin de la fenetre.
+# Mesuree sur capture reelle : le popup s'affiche toujours au meme endroit.
+POPUP_CLOSE = (1295, 350)
+
+# La meme croix, exprimee en fraction du cadre detecte. On s'en sert en
+# priorite quand le cadre est trouve — ca reste juste meme si le jeu decale ou
+# redimensionne le popup — et on retombe sur la valeur fixe sinon.
 CLOSE_BUTTON = {"x": 0.974, "y": 0.038}
 
 user32 = ctypes.windll.user32
@@ -138,11 +143,18 @@ class GameWindow:
         self.refresh()
         return grab(self.rect)
 
-    def close_popup(self, popup_box, settle=0.4):
-        """Ferme un popup en cliquant sa croix, calculee depuis son cadre."""
-        x0, y0, x1, y1 = popup_box
-        x = x0 + int((x1 - x0) * CLOSE_BUTTON["x"])
-        y = y0 + int((y1 - y0) * CLOSE_BUTTON["y"])
+    def close_popup(self, popup_box=None, settle=0.4):
+        """Ferme un popup.
+
+        Avec le cadre, la croix est calculee dessus — ca reste juste meme si le
+        jeu decale le popup. Sans cadre, on retombe sur la position fixe.
+        """
+        if popup_box:
+            x0, y0, x1, y1 = popup_box
+            x = x0 + int((x1 - x0) * CLOSE_BUTTON["x"])
+            y = y0 + int((y1 - y0) * CLOSE_BUTTON["y"])
+        else:
+            x, y = POPUP_CLOSE
         self.click(x, y, settle=settle)
         return x, y
 
@@ -162,22 +174,25 @@ def check():
         ("champ Y", COORD_FIELD_Y, (60, 160, 255)),
         ("bouton GO", COORD_GO_BUTTON, (60, 255, 90)),
         ("garage souris", MOUSE_PARK, (255, 220, 60)),
+        ("croix de fermeture", POPUP_CLOSE, (255, 0, 255)),
     ]
 
-    # La croix de fermeture se calcule depuis le cadre du popup : elle n'existe
-    # donc que si un popup est ouvert au moment du controle.
+    # Si un popup est ouvert, on montre AUSSI la position calculee depuis son
+    # cadre : c'est celle que le crawler utilise en priorite. Les deux doivent
+    # tomber au meme endroit.
     from popup import find_popup
 
     box = find_popup(image)
+    computed = None
     if box:
         x0, y0, x1, y1 = box
-        close = (
+        computed = (
             x0 + int((x1 - x0) * CLOSE_BUTTON["x"]),
             y0 + int((y1 - y0) * CLOSE_BUTTON["y"]),
         )
-        draw.rectangle([x0, y0, x1, y1], outline=(255, 0, 255), width=2)
-        draw.text((x0 + 6, y0 + 6), "cadre du popup detecte", fill=(255, 0, 255))
-        points.append(("croix de fermeture", close, (255, 0, 255)))
+        draw.rectangle([x0, y0, x1, y1], outline=(0, 255, 255), width=2)
+        draw.text((x0 + 6, y0 + 6), "cadre du popup detecte", fill=(0, 255, 255))
+        points.append(("croix calculee", computed, (0, 255, 255)))
 
     for label, (x, y), colour in points:
         draw.ellipse([x - 14, y - 14, x + 14, y + 14], outline=colour, width=3)
@@ -191,11 +206,12 @@ def check():
     print("Fenetre : {} ({}x{})".format(title, rect[2], rect[3]))
     print("Image de verification : {}".format(out))
 
-    if box:
-        print("Popup detecte : {} -> croix calculee en {}".format(box, close))
+    print("\ncroix de fermeture, valeur fixe : {}".format(POPUP_CLOSE))
+    if computed:
+        ecart = (abs(computed[0] - POPUP_CLOSE[0]), abs(computed[1] - POPUP_CLOSE[1]))
+        print("croix calculee depuis le cadre  : {}  (ecart {} px)".format(computed, ecart))
     else:
-        print("\nAucun popup ouvert : la croix de fermeture n'a pas pu etre situee.")
-        print("Ouvre un systeme dans le jeu et relance pour la verifier aussi.")
+        print("aucun popup ouvert : seule la valeur fixe est affichee")
 
     print("\nChaque cercle doit tomber sur l'element nomme. Si un seul est a")
     print("cote, ne lance pas le crawler : il taperait dans le vide.")
