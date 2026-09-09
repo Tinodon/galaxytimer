@@ -397,32 +397,44 @@ async function handleMap(interaction) {
     return;
   }
 
-  const known = pins.all(interaction.guildId);
+  const members = alliance.Members ?? [];
+  const pinned = pins.all(interaction.guildId);
   const rows = [];
   let mapped = 0;
 
-  for (const member of alliance.Members ?? []) {
-    const entry = known[String(member.Id)];
-    if (!entry?.coords.length) continue;
-    mapped += entry.coords.length;
-    rows.push(
-      `**${member.Name}** (lvl ${member.Level}) — ` +
-      entry.coords.map((c) => `\`${c.x},${c.y}\``).join(' '),
-    );
+  // Comme /find : les deux sources, la saisie manuelle par-dessus le balayage.
+  // Un membre absent des deux n'apparait pas plutot que d'apparaitre vide.
+  for (const member of members) {
+    const spots = new Map();
+
+    for (const spot of (await map.coloniesOf(member.Name).catch(() => null)) ?? []) {
+      spots.set(`${spot.x},${spot.y}`, spot);
+    }
+    for (const spot of pinned[String(member.Id)]?.coords ?? []) {
+      spots.set(`${spot.x},${spot.y}`, spot);
+    }
+    if (!spots.size) continue;
+
+    mapped += spots.size;
+    const list = [...spots.values()]
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+      .map((s) => `\`${s.x},${s.y}\``)
+      .join(' ');
+    rows.push(`**${member.Name}** (lvl ${member.Level}) — ${list}`);
   }
 
   if (!rows.length) {
     await interaction.editReply(
-      `**${alliance.Name}** — ${alliance.Members?.length ?? 0} members, nothing mapped yet.
+      `**${alliance.Name}** — ${members.length} members, none of them mapped yet.
 ` +
-      'Start with `/pin player:<name> coords:<x,y ...>`.',
+      'They may sit outside the scanned area, or their names were unreadable.',
     );
     return;
   }
 
   await interaction.editReply({
     content: fit([
-      `**${alliance.Name}** — ${mapped} colonies mapped across ${rows.length} member(s)`,
+      `**${alliance.Name}** — ${mapped} colonies across ${rows.length}/${members.length} member(s)`,
       alliance.InWar ? `**AT WAR** against ${alliance.OpponentAllianceId}` : '',
       '',
       ...rows,
