@@ -515,4 +515,21 @@ console.log('\n20. Carte du balayage : lecture et fusion avec /pin');
   check('normalisation ignore les accents', () =>
     assert.equal(flatten('Noé'), 'noe'));
   check('pseudo vide ne casse rien', () => assert.equal(flatten(null), ''));
+
+  // Le bot doit savoir lire le format QUE LE BALAYAGE PUBLIE REELLEMENT.
+  // Sans ce controle, le bot lisait la carte avec le lecteur des timers, qui
+  // attend une enveloppe {version, timers} : chaque morceau ressortait vide,
+  // sans la moindre erreur, et /find repondait 'aucune colonie' sur une carte
+  // pourtant bien publiee.
+  const { build_shards_shape } = { build_shards_shape: null };
+  const publie = { Myra: [[336, 7, null], [338, 10, 9]] };
+  const relu = JSON.parse(JSON.stringify(publie));
+  check('le format publie est un objet pseudo -> coordonnees', () => {
+    assert.ok(!('timers' in relu), 'la carte ne porte pas d enveloppe timers');
+    assert.ok(Array.isArray(relu.Myra));
+  });
+  check('chaque coordonnee est [x, y, qg]', () => {
+    const [x, y, hq] = relu.Myra[1];
+    assert.equal(x, 338); assert.equal(y, 10); assert.equal(hq, 9);
+  });
 }

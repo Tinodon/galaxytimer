@@ -8,7 +8,11 @@
 // toute la carte — et rien ne butera sur la limite de taille d'Upstash quand le
 // balayage s'etendra.
 
-import { selectBackend } from './store.js';
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const KEY_PREFIX = 'map:';
 const INDEX_KEY = 'map:index';
@@ -40,11 +44,33 @@ function shardOf(name) {
   return flat ? flat[0] : '_';
 }
 
+/**
+ * Lit une valeur brute, sans passer par le stockage des timers.
+ *
+ * Ce dernier enveloppe tout dans `{version, timers}` et ne rend que `timers` :
+ * s'en servir ici renvoyait un objet vide pour chaque morceau de carte, sans
+ * la moindre erreur — le bot repondait "aucune colonie" alors que la donnee
+ * etait bien publiee. La carte a donc sa propre lecture, au format qu'elle
+ * publie reellement.
+ */
 async function readKey(key) {
-  const backend = selectBackend(key);
-  if (backend.init) await backend.init();
-  const raw = backend.read();
-  return raw && Object.keys(raw).length ? raw : null;
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (url && token) {
+    const base = String(url).trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+    const response = await fetch(`${base}/get/${encodeURIComponent(`galaxytimer:${key}`)}`, {
+      headers: { Authorization: `Bearer ${String(token).trim().replace(/^["']|["']$/g, '')}` },
+    });
+    if (!response.ok) throw new Error(`Upstash ${response.status}`);
+    const raw = (await response.json()).result;
+    return raw ? JSON.parse(raw) : null;
+  }
+
+  // Hors production : un fichier depose a cote, pour pouvoir essayer en local.
+  const path = join(ROOT, 'data', `${key.replace(/:/g, '_')}.json`);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 async function loadShard(letter) {
