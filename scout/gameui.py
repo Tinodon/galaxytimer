@@ -114,6 +114,10 @@ class GameWindow:
         if not window:
             raise RuntimeError("Galaxy Life n'est pas ouvert.")
         self.title, self.rect = window
+        # Derniere valeur ecrite dans chaque champ. Le balayage parcourt une
+        # ligne entiere a Y constant : reecrire Y a chaque position couterait
+        # deux secondes pour rien, soit six minutes par ligne.
+        self.last_written = {"x": None, "y": None}
 
     def refresh(self):
         window = find_game_window()
@@ -161,11 +165,26 @@ class GameWindow:
         time.sleep(ACTION_PAUSE)
 
     def go_to(self, x, y, settle=1.0):
-        """Ecrit les coordonnees et valide. Ne verifie pas le resultat."""
-        self.type_coordinate(COORD_FIELD_X, x)
-        self.type_coordinate(COORD_FIELD_Y, y)
+        """Ecrit les coordonnees et valide.
+
+        Ne reecrit qu'un champ dont la valeur a change. Sur une ligne de
+        balayage, Y est identique d'un bout a l'autre : le reecrire a chaque
+        position coute deux secondes sans rien apporter.
+        """
+        if self.last_written["x"] != x:
+            self.type_coordinate(COORD_FIELD_X, x)
+            self.last_written["x"] = x
+        if self.last_written["y"] != y:
+            self.type_coordinate(COORD_FIELD_Y, y)
+            self.last_written["y"] = y
+
         self.click(*COORD_GO_BUTTON, settle=0)
         time.sleep(settle)
+
+    def forget_written(self):
+        """Oublie ce qui a ete ecrit : a appeler si le jeu a pu perdre l'etat
+        des champs (popup bloque, clic ailleurs, reprise apres incident)."""
+        self.last_written = {"x": None, "y": None}
 
     def capture(self):
         self.refresh()

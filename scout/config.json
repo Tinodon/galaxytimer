@@ -19,7 +19,7 @@
     "max_screens": 0,
     "_comment": "0 = sans limite. Le balayage tourne jusqu'a Ctrl+C. Mettre une valeur pour un test court."
   },
-  "step_x": 5,
+  "step_x": 8,
   "step_y": 3,
   "_step": "Pas de deplacement, different sur chaque axe : la zone de jeu fait 1899x654, soit pres de trois fois plus large que haute. 8 horizontal et 3 vertical sont les maximums sans trou entre deux ecrans. 5 et 3 laissent une marge horizontale mais aucune verticale."
 }

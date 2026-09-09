@@ -327,6 +327,11 @@ def main():
             if stop_requested:
                 break
             report = visit_system(game, target, position, timings, store, args.read)
+            # Un incident a pu deplacer le focus ou vider les champs : on ne
+            # peut plus supposer qu'ils contiennent encore ce qu'on y a ecrit.
+            if report["status"] in ("popup bloque", "popup disparu pendant le chargement"):
+                game.forget_written()
+
             if report["status"] == "focus perdu":
                 print("  [!] Galaxy Life n'est plus au premier plan. Arret.")
                 log("focus perdu pendant un clic, arret")
