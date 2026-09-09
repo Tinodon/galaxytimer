@@ -1,33 +1,23 @@
 {
-  "_comment": "Constantes de calibrage. Remplies par scout/calibrate.py, ajustables a la main.",
+  "_comment": "Reglages du balayage. Modifiables sans toucher au code.",
 
-  "guild_id": "796447983604072498",
-  "scout_name": "crawler",
+  "origin": [700, 860],
+  "_origin": "Point de depart du parcours en spirale. Mets tes propres coordonnees : la carte proche est la seule immediatement utile, la distance comptant pour attaquer.",
 
-  "viewport": null,
-  "_viewport": "[x, y, largeur, hauteur] de la zone de carte a l'ecran. null = ecran entier.",
-
-  "drag": {
-    "step_x": 0,
-    "step_y": 0,
-    "_comment": "Pixels de deplacement par glissement. A mesurer : glisse la carte et regarde de combien les coordonnees affichees changent."
-  },
-
-  "grid": {
-    "columns": 0,
-    "rows": 0,
-    "_comment": "Nombre de pas pour couvrir la carte. 0 = non calibre."
-  },
+  "step": 6,
+  "_step": "Pas de deplacement. 8 est le maximum sans trou entre deux ecrans ; 6 laisse un quart de marge de securite. Plus petit = plus sur mais plus long : 5 fait 79000 ecrans contre 55000 a 6.",
 
   "timing": {
     "settle_ms": 900,
+    "popup_ms": 700,
+    "close_ms": 400,
     "jitter_ms": 400,
-    "_comment": "Attente apres chaque deplacement, plus une variation aleatoire. Laisser le temps a l'affichage de se stabiliser avant la capture."
+    "_comment": "Attentes apres navigation, ouverture et fermeture d'un popup. jitter s'y ajoute au hasard. A augmenter si le jeu rame : un popup pas encore affiche est un systeme perdu."
   },
 
   "session": {
-    "max_minutes": 30,
-    "max_captures": 400,
-    "_comment": "Bornes dures. Un script qui tourne sans limite finit par tourner la nuit entiere sur un ecran d'erreur."
+    "max_minutes": 60,
+    "max_screens": 500,
+    "_comment": "Bornes dures. Un script sans limite finit par tourner la nuit entiere sur un ecran d'erreur en croyant travailler."
   }
 }

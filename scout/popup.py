@@ -25,8 +25,13 @@ import numpy as np
 import pytesseract
 from PIL import Image, ImageOps
 
-# "RAN (688,852)" — seules les coordonnees comptent vraiment.
+# "RAN (688,852)" : le nom du systeme, puis ses coordonnees.
+#
+# Les coordonnees sont l'identite du systeme — c'est sur elles qu'on
+# dedoublonne. Le nom est du confort d'affichage : s'il est mal lu, on garde
+# quand meme l'entree.
 TITLE_COORDS = re.compile(r"\(?\s*(\d{1,4})\s*[,.]\s*(\d{1,4})\s*\)?")
+TITLE_NAME = re.compile(r"([A-Za-z][A-Za-z0-9 '\-]{1,22}?)\s*\(")
 
 NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
@@ -141,8 +146,13 @@ def best_read(image, scale, thresholds, whitelist=None):
     return best
 
 
-def read_popup(image, debug_dir=None):
-    """Renvoie {'coords': (x, y), 'players': [...]} ou None si pas de popup."""
+def read_popup(image, debug_dir=None, expected=None, tolerance=12):
+    """Renvoie {'coords': (x, y), 'name': str, 'players': [...]} ou None.
+
+    `expected` : coordonnees ou le crawler vient de naviguer. Sert a ecarter une
+    lecture ou l'OCR a perdu un chiffre — un systeme affiche a l'ecran est
+    forcement dans le voisinage immediat de la position courante.
+    """
     box = find_popup(image)
     if not box:
         return None
@@ -155,19 +165,51 @@ def read_popup(image, debug_dir=None):
         popup.save(Path(debug_dir) / "popup.png")
 
     # --- Titre ---
+    #
+    # L'OCR perd parfois un chiffre : "(716,866)" ressort en "(71,866)". Des
+    # coordonnees fausses sont pires que pas de coordonnees — elles envoient
+    # quelqu'un au mauvais endroit. On lit donc plusieurs fois avec des reglages
+    # differents et on confronte les resultats.
     title_img = popup.crop((0, 0, width, int(height * 0.09)))
-    title_text = ""
-    for scale in (3, 4):
+    candidates = []
+    for scale in (3, 4, 5):
         for threshold in (120, 150, 180):
-            candidate = ocr(title_img, scale, threshold)
-            if TITLE_COORDS.search(candidate):
-                title_text = candidate
-                break
-        if title_text:
-            break
+            text = ocr(title_img, scale, threshold)
+            match = TITLE_COORDS.search(text)
+            if match:
+                candidates.append((int(match.group(1)), int(match.group(2)), text))
 
-    match = TITLE_COORDS.search(title_text)
-    coords = (int(match.group(1)), int(match.group(2))) if match else None
+    coords, title_text = None, ""
+    if candidates:
+        if expected:
+            # Le crawler sait ou il a navigue : un systeme visible est
+            # forcement a quelques unites de la. On retient la lecture la plus
+            # proche, ce qui elimine d'office un chiffre manquant.
+            plausible = [
+                c for c in candidates
+                if abs(c[0] - expected[0]) <= tolerance
+                and abs(c[1] - expected[1]) <= tolerance
+            ]
+            if plausible:
+                best = min(plausible, key=lambda c: abs(c[0] - expected[0]) + abs(c[1] - expected[1]))
+                coords, title_text = (best[0], best[1]), best[2]
+        else:
+            # Sans reference, on prend la lecture la plus frequente : une erreur
+            # d'OCR se repete rarement a l'identique sur trois reglages.
+            counts = {}
+            for x, y, text in candidates:
+                counts.setdefault((x, y), []).append(text)
+            best_key = max(counts, key=lambda k: len(counts[k]))
+            coords, title_text = best_key, counts[best_key][0]
+
+    # L'OCR coupe parfois le nom en morceaux ("^ZM IDI" pour AZMIDI) et ajoute
+    # un caractere parasite en tete. On recolle tous les morceaux plutot que de
+    # n'en garder qu'un — ne prendre que le dernier donnait "IDI".
+    name_match = TITLE_NAME.search(title_text)
+    system_name = None
+    if name_match:
+        joined = "".join(ch for ch in name_match.group(1) if ch.isalnum()).upper()
+        system_name = joined.lstrip("0123456789") or None
 
     # --- Les 12 emplacements ---
     players = []
@@ -191,7 +233,12 @@ def read_popup(image, debug_dir=None):
             name = best_read(crop, 6, (110, 140, 170, 200), whitelist=NAME_CHARS)
             players.append({"slot": slot, "name": name})
 
-    return {"coords": coords, "title": title_text, "players": players}
+    return {
+        "coords": coords,
+        "name": system_name,
+        "title": title_text,
+        "players": players,
+    }
 
 
 def main():
