@@ -61,7 +61,11 @@ export async function coloniesOfMany(playerIds) {
 }
 
 /**
- * Joueurs presents sur la carte, les plus cartographies d'abord (/list).
+ * Joueurs presents sur la carte, par ordre alphabetique (/list).
+ *
+ * Alphabetique et sans tenir compte des majuscules : c'est l'ordre dans lequel
+ * on cherche un nom. Un classement "les plus cartographies d'abord" obligeait a
+ * parcourir les pages pour retrouver quelqu'un.
  *
  * Sert a verifier ce que la base contient vraiment. Chaque joueur vient avec
  * son nombre de colonies connues ET son nombre de planetes selon l'API : plus
@@ -83,7 +87,7 @@ export async function listPlayers({ search = '', page = 1, pageSize = 50 } = {})
     `SELECT j.pseudo, j.nb_planetes, count(*)::int AS known
      FROM colonies c JOIN joueurs j ON j.id = c.joueur_id ${where}
      GROUP BY j.id, j.pseudo, j.nb_planetes
-     ORDER BY known DESC, lower(j.pseudo)
+     ORDER BY lower(j.pseudo), j.pseudo
      LIMIT ${Number(pageSize)} OFFSET ${(Number(page) - 1) * Number(pageSize)}`,
     params,
   );

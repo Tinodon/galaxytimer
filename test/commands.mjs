@@ -174,6 +174,9 @@ async function checkMap() {
     /Myra/.test(liste) && /HansWorsdt/.test(liste) && /Stijnjr/.test(liste), liste.slice(0, 200));
   report('/list donne colonies connues / planetes', /`Myra` 4\/\d+/.test(liste), liste.slice(0, 200));
   report('/list tient dans un message Discord', liste.length <= 2000, `${liste.length} caracteres`);
+  const ordre = (liste.match(/`[^`]+` \d/g) ?? []).map((s) => s.slice(1, s.lastIndexOf('`')));
+  report('/list est dans l\'ordre alphabetique, sans tenir compte des majuscules',
+    ordre.join('|') === ['HansWorsdt', 'Myra', 'Stijnjr'].join('|'), ordre.join(' '));
   const listeFiltre = keep(await run('list', { filter: 'myr' }));
   report('/list myr filtre par bout de pseudo',
     /Myra/.test(listeFiltre) && !/HansWorsdt/.test(listeFiltre), listeFiltre.slice(0, 200));
