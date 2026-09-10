@@ -196,7 +196,7 @@ console.log('13. Aide et description, generees depuis le registre');
   }
   check('/glhelp tient sous les 2000 caracteres Discord', () => assert.ok(help.length <= 2000));
   check('/glhelp annonce 35h, pas 1d 11h', () => assert.ok(help.includes('35h')));
-  check('/glhelp explique les timers nommes', () => assert.match(help, /several/i));
+  check('/glhelp explique les timers nommes', () => assert.match(help, /side by side/i));
 
   const desc = descriptionText();
   check('description sous la limite Discord de 400', () => assert.ok(desc.length <= MAX_DESCRIPTION));

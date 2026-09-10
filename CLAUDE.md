@@ -155,8 +155,21 @@ ne sont plus lues.
   `rafraichir_cases()` — jamais a la main, jamais en JS.
 - **Carte globale** : un pin est visible sur tous les serveurs. Choix de Noe :
   le but est de cartographier tout le jeu.
-- La publication ne remplace que les colonies `releve` ; un pin l'emporte
-  toujours sur un releve a la meme coordonnee.
+- **Une ligne par PLANETE**, pas par systeme : un joueur peut avoir plusieurs
+  planetes au meme endroit (`numero` 1, 2, 3...). Fusionner par (joueur, x, y)
+  en avait fait perdre 622. Les 24 cases repetent alors la coordonnee.
+- **`/pin` ajoute toujours une planete**, meme sur une case connue (regle de
+  Noe) : `/pin Myra 336,7 5` = coordonnee puis QG (1-9, le max du jeu).
+- **`/edit` corrige une ligne par son numero dans `/find`** ; `/find` et
+  `/edit` partagent l'ordre `x, y, numero` (`PLANET_ORDER` dans map.js). Une
+  ligne du releve n'est jamais effacee mais `masquee`, sinon la publication
+  suivante la ferait revenir.
+- La publication ne remplace que les planetes `releve` non masquees ; un pin
+  ou une ligne masquee a la meme place (joueur, x, y, numero) l'emporte.
+- Le niveau de QG s'affiche avec l'emoji d'application `starbase`, repli
+  "HQ" s'il manque (`NAMED_EMOJIS` dans src/emoji.js). L'aide doit tenir sous
+  2000 caracteres AVEC les emojis custom (~30 caracteres chacun) : verifie par
+  test/commands.mjs.
 - Recherches **par id de joueur** (obtenu via l'API), jamais par pseudo.
 - **Un QG inconnu n'affiche rien** sur Discord : ni `HQ ?`, ni `NaN`, ni
   `null`. Verrouille par `test/commands.mjs`.

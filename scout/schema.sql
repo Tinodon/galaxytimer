@@ -39,30 +39,47 @@ CREATE TABLE IF NOT EXISTS joueurs (
 CREATE INDEX IF NOT EXISTS joueurs_pseudo   ON joueurs (lower(pseudo));
 CREATE INDEX IF NOT EXISTS joueurs_alliance ON joueurs (alliance);
 
--- La verite : une ligne par colonie connue, relevee par le balayage ou saisie
+-- La verite : une ligne par PLANETE connue, relevee par le balayage ou saisie
 -- avec /pin. C'est ici qu'on cherche "qui est en 359,11".
+--
+-- Un joueur peut avoir plusieurs planetes dans le meme systeme (sniviman en a
+-- 6 en 102,0) : `numero` les distingue (1, 2, 3...). Une ligne par (joueur,
+-- x, y) en faisait disparaitre 622.
 CREATE TABLE IF NOT EXISTS colonies (
   joueur_id  bigint   NOT NULL REFERENCES joueurs (id) ON DELETE CASCADE,
   x          smallint NOT NULL,
   y          smallint NOT NULL,
+  numero     smallint NOT NULL DEFAULT 1,     -- planete n de ce joueur dans ce systeme
   qg         smallint,                      -- vide tant que la vignette n'est pas lue
   systeme    text,                          -- nom du systeme, ex. DIADEM
   origine    text     NOT NULL CHECK (origine IN ('releve', 'pin')),
   par        text,                          -- qui a pinne (pseudo Discord)
   confiance  real,                          -- score du rapprochement de pseudo
   image      text,                          -- capture d'origine, pour verifier
-  vu_le      timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (joueur_id, x, y)
+  -- Ligne du balayage corrigee a la main (/edit). Elle reste en base, cachee,
+  -- pour que la prochaine publication ne la fasse pas revenir.
+  masquee    boolean  NOT NULL DEFAULT false,
+  vu_le      timestamptz NOT NULL DEFAULT now()
 );
+
+-- Bases creees avant `numero` : on ajoute les colonnes et on remplace l'ancienne
+-- unicite (une ligne par joueur et coordonnee) par une ligne par planete.
+-- Aucune ligne n'est supprimee.
+ALTER TABLE colonies ADD COLUMN IF NOT EXISTS numero  smallint NOT NULL DEFAULT 1;
+ALTER TABLE colonies ADD COLUMN IF NOT EXISTS masquee boolean  NOT NULL DEFAULT false;
+ALTER TABLE colonies DROP CONSTRAINT IF EXISTS colonies_joueur_id_x_y_key;
+CREATE UNIQUE INDEX IF NOT EXISTS colonies_planete ON colonies (joueur_id, x, y, numero);
 
 CREATE INDEX IF NOT EXISTS colonies_coords ON colonies (x, y);
 
 -- Recalcule les 24 cases des joueurs donnes depuis `colonies`.
 --
--- Appelee par la publication (tous les joueurs) ET par /pin (un seul) : c'est
--- la seule facon d'ecrire les cases, donc elles ne peuvent pas diverger de
--- `colonies`. Ordre des cases : par x puis y. Au-dela des colonies connues,
--- les cases restent vides.
+-- Appelee par la publication (tous les joueurs), /pin et /edit : c'est la seule
+-- facon d'ecrire les cases, donc elles ne peuvent pas diverger de `colonies`.
+-- Une case par PLANETE : deux planetes dans le meme systeme occupent deux
+-- cases avec la meme coordonnee. Ordre : x, y, puis numero — le meme que les
+-- lignes numerotees de /find. Lignes masquees exclues. Au-dela des planetes
+-- connues, les cases restent vides.
 CREATE OR REPLACE FUNCTION rafraichir_cases(ids bigint[]) RETURNS void
 LANGUAGE sql AS $$
   UPDATE joueurs j SET
@@ -80,12 +97,12 @@ LANGUAGE sql AS $$
     colonie_12 = c.pos[12], qg_12 = c.qg[12]
   FROM (
     SELECT j2.id,
-           array_agg(col.x || ',' || col.y ORDER BY col.x, col.y)
+           array_agg(col.x || ',' || col.y ORDER BY col.x, col.y, col.numero)
              FILTER (WHERE col.joueur_id IS NOT NULL) AS pos,
-           array_agg(col.qg ORDER BY col.x, col.y)
+           array_agg(col.qg ORDER BY col.x, col.y, col.numero)
              FILTER (WHERE col.joueur_id IS NOT NULL) AS qg
     FROM joueurs j2
-    LEFT JOIN colonies col ON col.joueur_id = j2.id
+    LEFT JOIN colonies col ON col.joueur_id = j2.id AND NOT col.masquee
     WHERE j2.id = ANY (ids)
     GROUP BY j2.id
   ) c

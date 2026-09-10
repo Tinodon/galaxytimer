@@ -14,9 +14,13 @@ Sources, toutes sur ce PC :
   - data/systems_resolus.jsonl  les colonies relevees et rattachees a un joueur
                                 (python scout/resolve.py --write).
 
-La publication ne touche JAMAIS aux pins : elle remplace les colonies d'origine
-"releve", et un releve tombant sur la coordonnee d'un pin est ignore — celui qui
-a pinne vient de regarder, le releve date d'une capture plus ancienne.
+Une ligne par PLANETE : un joueur qui a 6 planetes dans un systeme y a 6 lignes,
+numerotees 1 a 6.
+
+La publication ne touche JAMAIS aux pins ni aux corrections faites avec /edit :
+elle remplace seulement les planetes relevees et non corrigees. Une planete
+relevee qui tombe sur la place d'un pin (meme joueur, meme systeme, meme numero)
+est ignoree : celui qui a pinne vient de regarder.
 
 Tout se fait dans une seule transaction : un lecteur voit l'ancienne carte ou la
 nouvelle, jamais une moitie. Les fichiers source ne sont pas modifies ; la base
@@ -128,24 +132,26 @@ def publish(conn, by_id, rows):
             CREATE TEMP TABLE t_touches ON COMMIT DROP AS
             SELECT DISTINCT joueur_id AS id FROM colonies""")
 
-        cur.execute("DELETE FROM colonies WHERE origine = 'releve'")
+        # Les lignes du releve corrigees a la main (/edit) restent : masquees,
+        # elles bloquent le retour de la valeur fausse.
+        cur.execute("DELETE FROM colonies WHERE origine = 'releve' AND NOT masquee")
 
         cur.execute("""
             CREATE TEMP TABLE t_colonies (
-              joueur_id bigint, x smallint, y smallint, qg smallint, systeme text,
-              confiance real, image text, vu_le bigint
+              joueur_id bigint, x smallint, y smallint, numero smallint, qg smallint,
+              systeme text, confiance real, image text, vu_le bigint
             ) ON COMMIT DROP""")
         with cur.copy("COPY t_colonies FROM STDIN") as copy:
             for player_id, c in rows:
-                copy.write_row((player_id, c["x"], c["y"], c["hq"], c["system"],
-                                c["score"], c["image"], c["at"]))
+                copy.write_row((player_id, c["x"], c["y"], c["number"], c["hq"],
+                                c["system"], c["score"], c["image"], c["at"]))
         cur.execute("""
             INSERT INTO colonies
-              (joueur_id, x, y, qg, systeme, origine, confiance, image, vu_le)
-            SELECT joueur_id, x, y, qg, systeme, 'releve', confiance, image,
+              (joueur_id, x, y, numero, qg, systeme, origine, confiance, image, vu_le)
+            SELECT joueur_id, x, y, numero, qg, systeme, 'releve', confiance, image,
                    COALESCE(to_timestamp(vu_le), now())
             FROM t_colonies
-            ON CONFLICT (joueur_id, x, y) DO NOTHING""")
+            ON CONFLICT (joueur_id, x, y, numero) DO NOTHING""")
         inserted = cur.rowcount
 
         cur.execute("""
@@ -154,7 +160,9 @@ def publish(conn, by_id, rows):
 
         cur.execute("SELECT count(*) FROM joueurs")
         players = cur.fetchone()[0]
-        cur.execute("SELECT count(*), count(*) FILTER (WHERE origine = 'pin') FROM colonies")
+        cur.execute("""SELECT count(*) FILTER (WHERE NOT masquee),
+                              count(*) FILTER (WHERE origine = 'pin' AND NOT masquee)
+                       FROM colonies""")
         colonies, pinned = cur.fetchone()
     return players, colonies, pinned, inserted
 
@@ -191,9 +199,9 @@ def import_pins(conn, env):
                     print("  {:<16} {:>4},{:<4}  par {}".format(
                         entry["name"], spot["x"], spot["y"], spot.get("by") or "?"))
                     cur.execute("""
-                        INSERT INTO colonies (joueur_id, x, y, origine, par, vu_le)
-                        VALUES (%s, %s, %s, 'pin', %s, to_timestamp(%s / 1000.0))
-                        ON CONFLICT (joueur_id, x, y) DO UPDATE SET
+                        INSERT INTO colonies (joueur_id, x, y, numero, origine, par, vu_le)
+                        VALUES (%s, %s, %s, 1, 'pin', %s, to_timestamp(%s / 1000.0))
+                        ON CONFLICT (joueur_id, x, y, numero) DO UPDATE SET
                           origine = 'pin', par = EXCLUDED.par, vu_le = EXCLUDED.vu_le""",
                                 (pid, spot["x"], spot["y"], spot.get("by"),
                                  spot.get("at") or time.time() * 1000))

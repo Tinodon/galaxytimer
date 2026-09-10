@@ -69,56 +69,63 @@ def shard_of(name):
 
 
 def resolved_colonies():
-    """Les colonies publiables : une par (joueur, x, y), rattachee a un joueur reel.
+    """Les planetes publiables, rattachees a un joueur reel : une par case du popup.
 
-    SEULE definition de "colonie publiable", utilisee par l'envoi vers Upstash
+    SEULE definition de "planete publiable", utilisee par l'envoi vers Upstash
     et par la base SQL (publish_sql.py). Deux copies de ce filtre finiraient
     par diverger, et les deux cartes ne diraient plus la meme chose.
 
-    Renvoie (colonies, gardees, ecartees) ; chaque colonie est un dict
-    {name, x, y, hq, system, score, image, at}.
+    Un joueur peut avoir plusieurs planetes dans le meme systeme : chacune est
+    gardee, numerotee 1, 2, 3... (`number`). On fusionnait autrefois les doublons
+    (joueur, x, y) en croyant eliminer un meme systeme vu depuis deux ecrans ;
+    or chaque systeme n'apparait qu'une fois dans le releve, et cette fusion
+    faisait disparaitre 622 vraies planetes.
+
+    Renvoie (planetes, gardees, ecartees) ; chaque planete est un dict
+    {name, x, y, number, hq, system, score, image, at}.
     """
     if not RESOLVED_FILE.exists():
         raise SystemExit(
             "Fichier absent : {}\nLance d'abord : python scout/resolve.py --write".format(
                 RESOLVED_FILE))
 
-    best = {}
-    kept = skipped = 0
-
+    # Un systeme = une entree. Si le fichier en portait deux pour la meme
+    # coordonnee, la plus recente l'emporte : sinon ses planetes seraient
+    # comptees deux fois.
+    systems = {}
     with RESOLVED_FILE.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
-            if not line:
+            if line:
+                entry = json.loads(line)
+                systems[(entry["x"], entry["y"])] = entry
+
+    colonies = []
+    kept = skipped = 0
+    for entry in systems.values():
+        players = entry.get("players", [])
+        # Le niveau de QG est range au niveau du SYSTEME, dans une liste
+        # alignee sur `players`. On le lisait sur chaque joueur, ou il n'est
+        # jamais : tous les QG sortaient vides, meme ceux qui etaient lus.
+        hqs = entry.get("hq") or []
+        if len(hqs) != len(players):
+            hqs = [None] * len(players)
+
+        seen = defaultdict(int)
+        for player, hq in zip(players, hqs):
+            name = player.get("name")
+            if not name or player.get("score", 0) < MIN_SCORE:
+                skipped += 1
                 continue
-            entry = json.loads(line)
-            players = entry.get("players", [])
-            # Le niveau de QG est range au niveau du SYSTEME, dans une liste
-            # alignee sur `players`. On le lisait sur chaque joueur, ou il n'est
-            # jamais : tous les QG sortaient vides, meme ceux qui etaient lus.
-            hqs = entry.get("hq") or []
-            if len(hqs) != len(players):
-                hqs = [None] * len(players)
+            kept += 1
+            seen[name] += 1
+            colonies.append({
+                "name": name, "x": entry["x"], "y": entry["y"], "number": seen[name],
+                "hq": hq, "system": entry.get("name"), "score": player.get("score"),
+                "image": entry.get("source"), "at": entry.get("at"),
+            })
 
-            for player, hq in zip(players, hqs):
-                name = player.get("name")
-                if not name or player.get("score", 0) < MIN_SCORE:
-                    skipped += 1
-                    continue
-                kept += 1
-                colony = {
-                    "name": name, "x": entry["x"], "y": entry["y"], "hq": hq,
-                    "system": entry.get("name"), "score": player.get("score"),
-                    "image": entry.get("source"), "at": entry.get("at"),
-                }
-                # Une meme colonie peut avoir ete vue depuis deux ecrans : on en
-                # garde une, en preferant celle dont le QG est connu.
-                key = (name, entry["x"], entry["y"])
-                current = best.get(key)
-                if current is None or (current["hq"] is None and hq is not None):
-                    best[key] = colony
-
-    colonies = sorted(best.values(), key=lambda c: (c["name"], c["x"], c["y"]))
+    colonies.sort(key=lambda c: (c["name"], c["x"], c["y"], c["number"]))
     return colonies, kept, skipped
 
 

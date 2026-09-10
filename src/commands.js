@@ -19,6 +19,7 @@ import { playerReport, allianceReport, fit } from './intelview.js';
 import * as pins from './pins.js';
 import * as map from './map.js';
 import * as sql from './sql.js';
+import { namedEmoji } from './emoji.js';
 
 // Le message nomme son proprietaire mais ne doit pinger personne : seul le ping
 // de fin de timer a le droit de notifier.
@@ -96,12 +97,22 @@ export const definitions = [
 
   new SlashCommandBuilder()
     .setName('pin')
-    .setDescription('Record colonies you saw in game: /pin Myra 351,10')
-    // UN seul champ, rempli d'une traite : "Myra 351,10 352,11". Deux champs
+    .setDescription('Add a planet you saw in game: /pin Myra 336,7 5 (5 = HQ level)')
+    // UN seul champ, rempli d'une traite : "Myra 336,7 5". Deux champs
     // obligeaient a cliquer de l'un a l'autre, ce que Noe trouvait lent.
+    // Chaque /pin ajoute une planete, meme sur une case deja connue.
     .addStringOption((o) =>
       o.setName('player')
-        .setDescription('Player, then coordinates — e.g. Myra 351,10 352,11')
+        .setDescription('Player, coordinates, HQ level if known — e.g. Myra 336,7 5')
+        .setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('edit')
+    .setDescription('Fix a line of /find: /edit Myra 3 delete, /edit Myra 3 336,7 5')
+    .addStringOption((o) =>
+      o.setName('player')
+        .setDescription('Player, line number from /find, then delete / new coords / HQ')
         .setRequired(true))
     .toJSON(),
 
@@ -323,22 +334,53 @@ async function handleAlliance(interaction) {
  */
 const extras = (...parts) => parts.filter((p) => p !== null && p !== undefined && p !== '').join(' · ');
 
-const hqLabel = (hq) => (Number.isFinite(hq) ? `HQ ${hq}` : '');
+/**
+ * Niveau de QG : l'emoji starbase puis le niveau (demande de Noe), ou "HQ 5"
+ * tant que l'emoji n'est pas ajoute a l'application. Rien si le QG est inconnu.
+ */
+const hqLabel = (hq) => (Number.isFinite(hq) ? `${namedEmoji('starbase')} ${hq}` : '');
 
-// Colonie saisie a la main avec /pin. Un emoji plutot qu'un mot : demande de
+// Planete saisie a la main avec /pin. Un emoji plutot qu'un mot : demande de
 // Noe, ca se repere d'un coup d'oeil dans une liste.
 const PIN_MARK = '📌';
 
 /**
- * "`336,7` HQ 5 📌" — coordonnees dans un bloc gris SERRE, sans espaces de
- * remplissage : Noe aime le bloc (lisible, copiable), pas les espaces qu'on y
- * mettait pour aligner. Rien apres les coordonnees si rien n'est connu.
- * Meme format dans /find (une par ligne) et /map (a la suite).
+ * "`336,7` <starbase> 5 📌" — coordonnees dans un bloc gris SERRE, sans espaces
+ * de remplissage : Noe aime le bloc (lisible, copiable), pas les espaces qu'on
+ * y mettait pour aligner. Rien apres les coordonnees si rien n'est connu.
  */
 function spotLine(spot) {
   return [`\`${spot.x},${spot.y}\``, hqLabel(spot.hq), spot.pinned ? PIN_MARK : '']
     .filter(Boolean)
     .join(' ');
+}
+
+/**
+ * Une ligne NUMEROTEE par planete, comme dans /find : "3 `336,7` <starbase> 5".
+ * Ces numeros sont ceux que /edit attend ; la liste suit l'ordre de la base
+ * (x, y, puis numero dans le systeme), le meme que celui de /edit.
+ */
+const numberedLines = (planets) => planets.map((spot, i) => `${i + 1} ${spotLine(spot)}`);
+
+/**
+ * Plusieurs planetes d'un joueur sur la meme case, regroupees pour une liste
+ * sur une ligne (/map) : "`102,0`×6 <starbase> 5·3 📌".
+ */
+function groupedSpots(planets) {
+  const groups = new Map();
+  for (const spot of planets) {
+    const key = `${spot.x},${spot.y}`;
+    const group = groups.get(key) ?? { key, count: 0, hqs: [], pinned: false };
+    group.count += 1;
+    if (Number.isFinite(spot.hq)) group.hqs.push(spot.hq);
+    group.pinned ||= spot.pinned;
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((g) => [
+    `\`${g.key}\`${g.count > 1 ? `×${g.count}` : ''}`,
+    g.hqs.length ? `${namedEmoji('starbase')} ${g.hqs.join('·')}` : '',
+    g.pinned ? PIN_MARK : '',
+  ].filter(Boolean).join(' '));
 }
 
 /** Repond proprement quand la base de la carte n'est pas configuree. */
@@ -348,16 +390,25 @@ async function requireMap(interaction) {
   return false;
 }
 
+/** Fiche joueur transmise a la base : l'API fait foi pour le pseudo et l'alliance. */
+const playerRecord = (user) => ({
+  id: user.Id,
+  name: user.Name,
+  alliance: user.AllianceId ?? null,
+  level: user.Level ?? null,
+  planets: user.Planets?.length ?? 0,
+});
+
 async function handlePin(interaction) {
   await interaction.deferReply();
-  const { name, coords, error } = pins.parsePinInput(interaction.options.getString('player'));
+  const { name, entries, error } = pins.parsePinInput(interaction.options.getString('player'));
   if (error) {
     await interaction.editReply(error);
     return;
   }
   if (!(await requireMap(interaction))) return;
 
-  // On resout le joueur via l'API : le releve est ainsi rattache a un id
+  // On resout le joueur via l'API : la planete est ainsi rattachee a un id
   // stable, meme si la personne change de pseudo.
   const user = await api.getUserByName(name).catch(() => null);
   if (!user) {
@@ -365,33 +416,64 @@ async function handlePin(interaction) {
     return;
   }
 
-  const known = user.Planets?.length ?? 0;
-  const result = await map.pin(
-    {
-      id: user.Id,
-      name: user.Name,
-      alliance: user.AllianceId ?? null,
-      level: user.Level ?? null,
-      planets: known,
-    },
-    coords,
-    displayNameOf(interaction),
-  );
-
-  const parts = [];
-  if (result.added) parts.push(`**${result.added}** new`);
-  if (result.updated) parts.push(`${result.updated} already known`);
+  const owned = user.Planets?.length ?? 0;
+  const result = await map.pin(playerRecord(user), entries, displayNameOf(interaction));
 
   const lines = [
-    `**${user.Name}** — ${parts.join(', ')}.`,
-    `${result.total} coordinate(s) recorded out of **${known}** colonies they own.`,
+    `**${user.Name}** — **${result.added}** planet(s) added: ${entries.map(spotLine).join(' ')}`,
+    `${result.total} planet(s) recorded out of **${owned}** they own. ` +
+      `\`/find ${user.Name}\` numbers them for \`/edit\`.`,
   ];
-  // Plus de coordonnees que de planetes : l'une d'elles est forcement fausse.
-  if (result.total > (known || map.MAX_COLONIES)) {
-    lines.push('That is more than they can own — one of these coordinates is probably wrong.');
+  // Plus de planetes que le joueur n'en possede : l'une d'elles est fausse.
+  if (result.total > (owned || map.MAX_COLONIES)) {
+    lines.push(`⚠️ That is more than they own — fix the wrong one with \`/edit ${user.Name} <line> delete\`.`);
   }
 
   await interaction.editReply({ content: lines.join('\n'), allowedMentions: NO_PING });
+}
+
+/** /edit : corrige une ligne de /find, designee par son numero. */
+async function handleEdit(interaction) {
+  await interaction.deferReply();
+  const { name, line, change, error } = pins.parseEditInput(interaction.options.getString('player'));
+  if (error) {
+    await interaction.editReply(error);
+    return;
+  }
+  if (!(await requireMap(interaction))) return;
+
+  const user = await api.getUserByName(name).catch(() => null);
+  if (!user) {
+    await interaction.editReply(`No player found for \`${name}\`.`);
+    return;
+  }
+
+  const result = await map.editLine(user.Id, line, change, displayNameOf(interaction));
+  if (result.error === 'no-line') {
+    await interaction.editReply(result.count
+      ? `**${user.Name}** has no line ${line} — \`/find ${user.Name}\` shows ${result.count}.`
+      : `**${user.Name}** has no mapped planet yet.`);
+    return;
+  }
+
+  const was = spotLine(result.before);
+  const what = change.remove
+    ? `line ${line} (${was}) deleted.`
+    : `line ${line} was ${was}, now ${spotLine({
+      x: change.coords?.x ?? result.before.x,
+      y: change.coords?.y ?? result.before.y,
+      hq: change.hq ?? result.before.hq,
+      pinned: true,
+    })}.`;
+
+  // La liste renumerotee : apres une suppression, les numeros suivants
+  // descendent d'un cran ; mieux vaut les montrer que les laisser deviner.
+  const lines = [
+    `**${user.Name}** — ${what}`,
+    '',
+    ...(result.planets.length ? numberedLines(result.planets) : ['No mapped planet left.']),
+  ];
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
 }
 
 async function handleFind(interaction) {
@@ -406,8 +488,8 @@ async function handleFind(interaction) {
 
   const owned = user.Planets?.length ?? 0;
 
-  // Une seule source : la base. Releve et pins y sont deja fusionnes, le pin
-  // l'emportant sur une meme coordonnee (voir scout/publish_sql.py).
+  // Une seule source : la base, releve et pins confondus. Une ligne par
+  // planete, numerotee : ce sont les numeros qu'attend /edit.
   if (!(await requireMap(interaction))) return;
   const found = await map.coloniesOf(user.Id);
 
@@ -423,7 +505,7 @@ async function handleFind(interaction) {
     `**${user.Name}** — ${extras(`level ${user.Level}`, user.AllianceId ?? 'no alliance')}`,
     `**${found.length}/${owned}** colonies mapped`,
     '',
-    ...found.map(spotLine),
+    ...numberedLines(found),
   ];
 
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
@@ -455,7 +537,7 @@ async function handleMap(interaction) {
 
     mapped += spots.length;
     // Meme format que /find ; les blocs gris separent deja les colonies.
-    const list = spots.map(spotLine).join(' ');
+    const list = groupedSpots(spots).join(' ');
     rows.push(`**${member.Name}** (lvl ${member.Level}) — ${list}`);
   }
 
@@ -563,13 +645,15 @@ async function handleWho(interaction) {
   const lines = [
     `**${system ? `${system} ` : ''}(${x},${y})** — ${found.length} player(s)`,
     '',
+    // Un joueur par ligne ; plusieurs planetes a lui sur cette case : "×6".
     ...found.map((f) => {
       const more = extras(
         f.alliance,
         Number.isFinite(f.level) ? `lvl ${f.level}` : '',
-        hqLabel(f.hq),
+        f.hqs.length ? `${namedEmoji('starbase')} ${f.hqs.join('·')}` : '',
       );
-      const line = more ? `**${f.name}** · ${more}` : `**${f.name}**`;
+      const name = `**${f.name}**${f.count > 1 ? ` ×${f.count}` : ''}`;
+      const line = more ? `${name} · ${more}` : name;
       return f.pinned ? `${line} ${PIN_MARK}` : line;
     }),
   ];
@@ -658,6 +742,7 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'map') return handleMap(interaction);
   if (interaction.commandName === 'who') return handleWho(interaction);
   if (interaction.commandName === 'list') return handleList(interaction);
+  if (interaction.commandName === 'edit') return handleEdit(interaction);
 
   const item = ITEMS[interaction.commandName];
   if (!item) return undefined;

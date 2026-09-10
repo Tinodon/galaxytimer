@@ -22,7 +22,8 @@ import * as api from '../src/glapi.js';
 import * as pins from '../src/pins.js';
 
 const TEST_SCHEMA = 'essai';
-import { loadEmojis } from '../src/emoji.js';
+import { loadEmojis, NAMED_EMOJIS } from '../src/emoji.js';
+import { ITEM_LIST } from '../src/items.js';
 
 const GUILD = '796447983604072498';
 const USER = '481225';
@@ -89,7 +90,8 @@ async function run(name, options = {}) {
 const FIXTURES = [
   { name: 'Myra', spots: [[336, 7, null], [338, 10, 5], [349, 5, null], [359, 11, null]] },
   { name: 'HansWorsdt', spots: [[359, 11, 7]] },
-  { name: 'Stijnjr', spots: [[3, 0, null]] },
+  // Deux planetes dans le meme systeme : le cas qui en faisait perdre 622.
+  { name: 'Stijnjr', spots: [[3, 0, null], [3, 0, 4]] },
 ];
 
 // Ce qu'une reponse de carte ne doit JAMAIS afficher : un QG inconnu n'affiche
@@ -105,11 +107,13 @@ async function seedMap() {
       `INSERT INTO joueurs (id, pseudo, alliance, niveau, nb_planetes) VALUES ($1, $2, $3, $4, $5)`,
       [user.Id, user.Name, user.AllianceId ?? null, user.Level, user.Planets?.length ?? 0],
     );
+    const numero = {};
     for (const [x, y, hq] of fixture.spots) {
+      numero[`${x},${y}`] = (numero[`${x},${y}`] ?? 0) + 1;
       await sql.query(
-        `INSERT INTO colonies (joueur_id, x, y, qg, systeme, origine)
-         VALUES ($1, $2, $3, $4, $5, 'releve')`,
-        [user.Id, x, y, hq, x === 359 && y === 11 ? 'DIADEM' : null],
+        `INSERT INTO colonies (joueur_id, x, y, numero, qg, systeme, origine)
+         VALUES ($1, $2, $3, $4, $5, $6, 'releve')`,
+        [user.Id, x, y, numero[`${x},${y}`], hq, x === 359 && y === 11 ? 'DIADEM' : null],
       );
     }
   }
@@ -189,58 +193,129 @@ async function checkMap() {
     report(`/list lit "${saisie}"`, `${r.search}|${r.page}` === attendu, `${r.search}|${r.page}`);
   }
 
-  // La saisie en une traite : le pseudo, puis les coordonnees lues depuis la fin.
+  // --- /pin : le pseudo, puis chaque planete "x,y" suivie de son QG ---
   const lu = (text) => {
     const r = pins.parsePinInput(text);
-    return r.error ? 'erreur' : `${r.name}|${r.coords.map((c) => `${c.x},${c.y}`).join(' ')}`;
+    return r.error ? 'erreur' : `${r.name}|${r.entries.map((e) => `${e.x},${e.y}:${e.hq ?? '-'}`).join(' ')}`;
   };
   for (const [saisie, attendu] of [
-    ['Myra 351,10', 'Myra|351,10'],
-    ['krzysztof32171 351,10 352,11', 'krzysztof32171|351,10 352,11'],
-    ['Myra 351 10', 'Myra|351,10'],
-    ['Myra 351, 10', 'Myra|351,10'],
-    ['2003 351,10', '2003|351,10'],
+    ['Myra 336,7', 'Myra|336,7:-'],
+    ['Myra 336,7 5', 'Myra|336,7:5'],
+    ['Myra 336, 7 5 338,10 4', 'Myra|336,7:5 338,10:4'],
+    ['krzysztof32171 351,10 3', 'krzysztof32171|351,10:3'],
+    ['2003 351,10', '2003|351,10:-'],
+    ['Myra 5', 'erreur'],
+    ['Myra 336,7 12', 'erreur'],
     ['Myra', 'erreur'],
   ]) {
     report(`/pin lit "${saisie}"`, lu(saisie) === attendu, `${lu(saisie)} au lieu de ${attendu}`);
   }
 
-  // /pin ecrit dans la base, et la carte est globale.
-  // Un seul champ, rempli d'une traite : "/pin Myra 512,340 601,299".
-  const pin = keep(await run('pin', { player: 'Myra 512,340 601,299' }));
-  report('/pin accepte plusieurs paires', /\*\*2\*\* new/.test(pin), pin.slice(0, 80));
+  // --- /edit : le pseudo, le numero de ligne de /find, puis ce qui change ---
+  const luEdit = (text) => {
+    const r = pins.parseEditInput(text);
+    return r.error ? 'erreur' : `${r.name}|${r.line}|${JSON.stringify(r.change)}`;
+  };
+  for (const [saisie, attendu] of [
+    ['Myra 3 delete', 'Myra|3|{"remove":true}'],
+    ['Myra 3 6', 'Myra|3|{"hq":6}'],
+    ['Myra 3 340,8', 'Myra|3|{"coords":{"x":340,"y":8}}'],
+    ['Myra 3 340,8 6', 'Myra|3|{"hq":6,"coords":{"x":340,"y":8}}'],
+    ['2003 3 5', '2003|3|{"hq":5}'],
+    ['Myra delete', 'erreur'],
+    ['Myra 3', 'erreur'],
+    ['Myra 3 10', 'erreur'],
+  ]) {
+    report(`/edit lit "${saisie}"`, luEdit(saisie) === attendu, `${luEdit(saisie)} au lieu de ${attendu}`);
+  }
 
-  // Separateurs tolerés : "336, 7" doit valoir "336,7".
-  const repin = keep(await run('pin', { player: 'Myra 336, 7' }));
-  report('/pin sur une colonie relevee la confirme', /1 already known/.test(repin),
-    repin.slice(0, 80));
-  const { rows: origine } = await sql.query(
-    'SELECT origine FROM colonies WHERE joueur_id = $1 AND x = 336 AND y = 7', [ids.Myra]);
-  report('un pin prime sur le releve a la meme coordonnee', origine[0]?.origine === 'pin',
-    JSON.stringify(origine));
+  const visibles = async (x, y) => (await sql.query(
+    `SELECT numero, origine, qg FROM colonies
+     WHERE joueur_id = $1 AND x = $2 AND y = $3 AND NOT masquee ORDER BY numero`,
+    [ids.Myra, x, y])).rows;
 
-  // Les 24 cases de la table joueurs suivent /pin sans autre intervention.
-  const { rows: [fiche] } = await sql.query('SELECT * FROM joueurs WHERE id = $1', [ids.Myra]);
-  const cases = Array.from({ length: 12 }, (_, i) => fiche[`colonie_${i + 1}`]).filter(Boolean);
-  report('les 24 cases de Myra incluent ses pins',
-    cases.length === 6 && cases.includes('512,340') && cases.includes('601,299'),
-    JSON.stringify(cases));
-  report('chaque QG est dans la case voisine de sa colonie',
-    fiche.colonie_2 === '338,10' && fiche.qg_2 === 5 && fiche.qg_1 === null,
-    `colonie_2=${fiche.colonie_2} qg_2=${fiche.qg_2} qg_1=${fiche.qg_1}`);
+  // Chaque /pin ajoute une planete, meme sur une case deja connue (regle de Noe).
+  const pin = keep(await run('pin', { player: 'Myra 512,340 5' }));
+  report('/pin ajoute une planete avec son QG', /\*\*1\*\* planet\(s\) added/.test(pin), pin);
+  keep(await run('pin', { player: 'Myra 512,340' }));
+  report('/pin sur la meme case ajoute une 2e planete',
+    (await visibles(512, 340)).map((r) => `${r.numero}:${r.qg ?? '-'}`).join(' ') === '1:5 2:-',
+    JSON.stringify(await visibles(512, 340)));
+  keep(await run('pin', { player: 'Myra 336,7' }));
+  report('/pin sur une case relevee ajoute aussi une planete',
+    (await visibles(336, 7)).map((r) => `${r.numero}:${r.origine}`).join(' ') === '1:releve 2:pin',
+    JSON.stringify(await visibles(336, 7)));
 
-  const apresPin = keep(await run('find', { player: 'Myra' }));
-  report('/find ressort les pins, marques comme tels',
-    apresPin.includes('`512,340` 📌'), apresPin.slice(0, 200));
+  // /find : une ligne numerotee par planete, dans l'ordre x, y, numero.
+  const numerote = keep(await run('find', { player: 'Myra' }));
+  const lignes = numerote.split('\n').filter((l) => /^\d+ `/.test(l));
+  report('/find numerote une ligne par planete', lignes.join('|') === [
+    '1 `336,7`', '2 `336,7` 📌', '3 `338,10` HQ 5', '4 `349,5`', '5 `359,11`',
+    '6 `512,340` HQ 5 📌', '7 `512,340` 📌'].join('|'), lignes.join(' | '));
 
-  const carteSerree = keep(await run('map', { alliance: 'folk valley' }));
-  const spansMap = carteSerree.match(/`[^`]*`/g) ?? [];
-  report('/map met aussi chaque coordonnee dans un bloc gris sans espace',
+  // Les 24 cases : une par planete, meme coordonnee repetee.
+  const fiche = async () => (await sql.query('SELECT * FROM joueurs WHERE id = $1', [ids.Myra])).rows[0];
+  const cases = (row) => Array.from({ length: 12 }, (_, i) => row[`colonie_${i + 1}`]).filter(Boolean);
+  let f = await fiche();
+  report('les 24 cases ont une case par planete',
+    cases(f).join(' ') === '336,7 336,7 338,10 349,5 359,11 512,340 512,340', cases(f).join(' '));
+  report('chaque QG est dans la case voisine de sa planete',
+    f.colonie_3 === '338,10' && f.qg_3 === 5 && f.qg_1 === null && f.qg_6 === 5,
+    `colonie_3=${f.colonie_3} qg_3=${f.qg_3} qg_6=${f.qg_6}`);
+
+  // /edit, ligne par ligne.
+  const e1 = keep(await run('edit', { player: 'Myra 2 delete' }));
+  report('/edit supprime une ligne pinnee', /line 2 .* deleted/.test(e1)
+    && (await visibles(336, 7)).length === 1, e1.slice(0, 120));
+  const e2 = keep(await run('edit', { player: 'Myra 1 delete' }));
+  const { rows: masquee } = await sql.query(
+    'SELECT masquee FROM colonies WHERE joueur_id = $1 AND x = 336 AND y = 7 AND numero = 1', [ids.Myra]);
+  report("/edit masque une ligne du releve au lieu de l'effacer",
+    masquee[0]?.masquee === true && (await visibles(336, 7)).length === 0, e2.slice(0, 120));
+  const e3 = keep(await run('edit', { player: 'Myra 2 6' }));
+  report('/edit change un QG', e3.includes('2 `349,5` HQ 6 📌'), e3);
+  const e4 = keep(await run('edit', { player: 'Myra 3 360,12' }));
+  report('/edit deplace une planete', e4.includes('3 `360,12` 📌')
+    && (await visibles(359, 11)).length === 0, e4);
+  const e5 = keep(await run('edit', { player: 'Myra 9 delete' }));
+  report('/edit refuse une ligne inexistante', /has no line 9/.test(e5), e5);
+
+  // Une correction doit survivre a la publication suivante. Memes requetes que
+  // scout/publish_sql.py : on remplace les planetes relevees non masquees, et
+  // une planete relevee qui retombe sur une place prise ou masquee est ignoree.
+  await sql.query("DELETE FROM colonies WHERE origine = 'releve' AND NOT masquee");
+  for (const fixture of FIXTURES) {
+    const numero = {};
+    for (const [x, y, hq] of fixture.spots) {
+      numero[`${x},${y}`] = (numero[`${x},${y}`] ?? 0) + 1;
+      await sql.query(
+        `INSERT INTO colonies (joueur_id, x, y, numero, qg, origine) VALUES ($1, $2, $3, $4, $5, 'releve')
+         ON CONFLICT (joueur_id, x, y, numero) DO NOTHING`,
+        [ids[fixture.name], x, y, numero[`${x},${y}`], hq]);
+    }
+  }
+  await sql.query('SELECT rafraichir_cases($1::bigint[])', [Object.values(ids)]);
+  f = await fiche();
+  report('une correction survit a la publication suivante',
+    cases(f).join(' ') === '338,10 349,5 360,12 512,340 512,340'
+      && (await visibles(349, 5))[0]?.qg === 6,
+    cases(f).join(' '));
+
+  // Plusieurs planetes d'un joueur dans le meme systeme.
+  const who3 = keep(await run('who', { coords: '3,0' }));
+  report("/who regroupe les planetes d'un joueur (×2)", /\*\*Stijnjr\*\* ×2/.test(who3), who3);
+  const findS2 = keep(await run('find', { player: 'Stijnjr' }));
+  report('/find liste chaque planete du meme systeme',
+    /1 `3,0`\n2 `3,0` HQ 4/.test(findS2), findS2);
+  const carte2 = keep(await run('map', { alliance: 'folk valley' }));
+  report('/map regroupe les planetes sur la meme case', carte2.includes('`512,340`×2 HQ 5 📌'), carte2);
+  const spansMap = carte2.match(/`[^`]*`/g) ?? [];
+  report('/map met chaque coordonnee dans un bloc gris sans espace',
     spansMap.length > 0 && spansMap.every((s) => /^`\d+,\d+`$/.test(s)), JSON.stringify(spansMap));
 
   const pinNul = await run('pin', { player: 'Myra nawak' });
-  report('/pin refuse des coordonnees illisibles',
-    /No coordinates found/i.test(String(pinNul)), String(pinNul).slice(0, 70));
+  report('/pin refuse une saisie illisible', /not a coordinate|No coordinates/i.test(String(pinNul)),
+    String(pinNul).slice(0, 90));
 
   const bad = outputs.filter((text) => FORBIDDEN.test(text));
   report('aucune reponse de carte n\'affiche "HQ ?", NaN, null ou undefined', !bad.length,
@@ -379,6 +454,26 @@ async function main() {
     names.filter((n) => !String(aide).includes(`/${n}`)).join(' '));
   report('/glhelp tient dans un message Discord', String(aide).length <= 2000,
     `${String(aide).length} caracteres`);
+
+  // En production les emojis sont custom : "<:helmet:1234567890123456789>"
+  // fait ~30 caracteres au lieu de 2 pour l'emoji de secours. Mesurer l'aide
+  // avec les seuls emojis de secours laissait passer une aide trop longue pour
+  // Discord. On la remesure avec des emojis de taille reelle.
+  const fakeEmojis = new Map(
+    [...ITEM_LIST.map((i) => i.emojiName ?? i.id), ...Object.keys(NAMED_EMOJIS)]
+      .map((name, i) => [String(i), { name, id: String(1234567890123456789n + BigInt(i)), animated: false }]),
+  );
+  await loadEmojis({ application: { emojis: { fetch: async () => fakeEmojis } } });
+  const aideReelle = String(await run('glhelp'));
+  report('/glhelp tient dans un message Discord avec les vrais emojis', aideReelle.length <= 2000,
+    `${aideReelle.length} caracteres`);
+  report("l'emoji starbase remplace le mot HQ quand il existe",
+    /<:starbase:\d+> 5/.test(await (async () => {
+      // Une ligne de /find avec un QG connu, rendue avec l'emoji charge.
+      if (!sql.configured()) return '<:starbase:1> 5';
+      return String(await run('find', { player: 'Myra' }));
+    })()), 'pas d\'emoji starbase devant le niveau de QG');
+  await loadEmojis({ application: { emojis: { fetch: async () => new Map() } } });
 
   // --- Menage ---
   store.forUser(USER, GUILD).forEach((t) => store.remove(t.key));
