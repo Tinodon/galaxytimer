@@ -135,9 +135,12 @@ async function checkMap() {
   const find = keep(await run('find', { player: 'Myra' }));
   report('/find sort les coordonnees relevees',
     /336,\s*7/.test(find) && /colonies mapped/i.test(find), find.slice(0, 90));
-  report('/find affiche le QG quand il est connu', find.includes('338,10 · HQ 5'), find);
-  // Noe ne veut pas de bloc de code gris : du texte simple.
-  report('/find ecrit en texte simple, sans bloc de code', !find.includes('`'), find);
+  report('/find affiche le QG quand il est connu', find.includes('`338,10` HQ 5'), find);
+  // Noe veut les coordonnees dans un bloc gris, mais SERRE : "`336,7`", pas
+  // "`  336,   7`" avec des espaces d'alignement.
+  const spans = find.match(/`[^`]*`/g) ?? [];
+  report('/find met chaque coordonnee dans un bloc gris sans espace',
+    spans.length === 4 && spans.every((s) => /^`\d+,\d+`$/.test(s)), JSON.stringify(spans));
 
   // Un pseudo en S : avec les morceaux Upstash, ces joueurs etaient ranges
   // sous "b" et cherches sous "s" — 18 % d'introuvables. La base cherche par id.
@@ -207,7 +210,12 @@ async function checkMap() {
 
   const apresPin = keep(await run('find', { player: 'Myra' }));
   report('/find ressort les pins, marques comme tels',
-    apresPin.includes('512,340 📌') && !apresPin.includes('`'), apresPin.slice(0, 200));
+    apresPin.includes('`512,340` 📌'), apresPin.slice(0, 200));
+
+  const carteSerree = keep(await run('map', { alliance: 'folk valley' }));
+  const spansMap = carteSerree.match(/`[^`]*`/g) ?? [];
+  report('/map met aussi chaque coordonnee dans un bloc gris sans espace',
+    spansMap.length > 0 && spansMap.every((s) => /^`\d+,\d+`$/.test(s)), JSON.stringify(spansMap));
 
   const pinNul = await run('pin', { player: 'Myra nawak' });
   report('/pin refuse des coordonnees illisibles',

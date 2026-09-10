@@ -319,13 +319,15 @@ const hqLabel = (hq) => (Number.isFinite(hq) ? `HQ ${hq}` : '');
 const PIN_MARK = '📌';
 
 /**
- * "336,7 · HQ 5 📌" — en texte simple, sans bloc de code (Noe ne veut pas
- * de "container" gris). Rien apres les coordonnees si rien n'est connu.
+ * "`336,7` HQ 5 📌" — coordonnees dans un bloc gris SERRE, sans espaces de
+ * remplissage : Noe aime le bloc (lisible, copiable), pas les espaces qu'on y
+ * mettait pour aligner. Rien apres les coordonnees si rien n'est connu.
+ * Meme format dans /find (une par ligne) et /map (a la suite).
  */
 function spotLine(spot) {
-  const coords = `${spot.x},${spot.y}`;
-  const hq = hqLabel(spot.hq);
-  return [hq ? `${coords} · ${hq}` : coords, spot.pinned ? PIN_MARK : ''].filter(Boolean).join(' ');
+  return [`\`${spot.x},${spot.y}\``, hqLabel(spot.hq), spot.pinned ? PIN_MARK : '']
+    .filter(Boolean)
+    .join(' ');
 }
 
 /** Repond proprement quand la base de la carte n'est pas configuree. */
@@ -441,9 +443,8 @@ async function handleMap(interaction) {
     if (!spots.length) continue;
 
     mapped += spots.length;
-    // Meme format que /find, sans bloc de code ; " | " separe les colonies,
-    // la virgule appartenant deja aux coordonnees.
-    const list = spots.map(spotLine).join(' | ');
+    // Meme format que /find ; les blocs gris separent deja les colonies.
+    const list = spots.map(spotLine).join(' ');
     rows.push(`**${member.Name}** (lvl ${member.Level}) — ${list}`);
   }
 
