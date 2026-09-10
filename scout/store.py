@@ -63,7 +63,8 @@ class SystemStore:
     def get(self, x, y):
         return self.systems.get((x, y))
 
-    def record(self, x, y, name, players, screen=None, source=None, reads=None):
+    def record(self, x, y, name, players, screen=None, source=None, reads=None,
+               hq=None, levels=None):
         """Ajoute ou met a jour un systeme. Renvoie True si c'est une nouveaute."""
         key = (x, y)
         is_new = key not in self.systems
@@ -89,6 +90,13 @@ class SystemStore:
         # que `players`. Elles ne servent qu'au rapprochement hors ligne.
         if reads:
             entry["reads"] = reads
+        # Niveau de QG et niveau du joueur, lus sur la vignette, dans le meme
+        # ordre que `players`. Le niveau du joueur sert a departager deux
+        # pseudos plausibles : l'API donne le niveau de chacun.
+        if hq:
+            entry["hq"] = hq
+        if levels:
+            entry["levels"] = levels
 
         # Une relecture qui trouve MOINS de joueurs est probablement moins bonne
         # (popup mal capture, animation en cours) : on garde la plus riche.
@@ -98,6 +106,8 @@ class SystemStore:
             entry["name"] = entry["name"] or previous.get("name")
             entry["source"] = previous.get("source", entry.get("source"))
             entry["reads"] = previous.get("reads", entry.get("reads"))
+            entry["hq"] = previous.get("hq", entry.get("hq"))
+            entry["levels"] = previous.get("levels", entry.get("levels"))
 
         self.systems[key] = entry
         with self.path.open("a", encoding="utf-8") as handle:

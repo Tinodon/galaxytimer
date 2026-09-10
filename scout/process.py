@@ -13,10 +13,10 @@ les images deviennent des donnees. Separer les deux a trois avantages :
     python scout/process.py --limit 50    s'arrete apres 50 images
     python scout/process.py --workers 4   limite le nombre de coeurs utilises
 
-La lecture d'un popup coute environ cinq secondes : une nuit de balayage en
-produit assez pour occuper une machine onze heures. Le travail est donc reparti
-sur tous les coeurs — chaque image est independante des autres, rien ne s'y
-oppose. Sur seize coeurs, les onze heures tombent sous l'heure.
+La lecture d'un popup coute une vingtaine de secondes : une nuit de balayage en
+produit assez pour occuper une machine plus de deux jours. Le travail est donc
+reparti sur tous les coeurs — chaque image est independante des autres, rien ne
+s'y oppose. Sur seize coeurs, les deux jours tombent a trois heures.
 
 Le nom des fichiers porte la position ou le crawler avait navigue :
 `700_860_412_318.jpg` — ecran (700,860), clic a (412,318) dans la fenetre. Cette
@@ -37,6 +37,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 POPUPS_DIR = DATA_DIR / "popups"
 PROCESSED_FILE = DATA_DIR / "popups_traites.json"
+
+# Cout moyen de lecture d'une capture, mesure sur echantillon.
+SECONDS_PER_IMAGE = 21
 
 sys.path.insert(0, str(BASE_DIR))
 
@@ -76,6 +79,14 @@ def read_one(path_str):
         # trancher, et trancher trop tot perdait le bon candidat.
         "reads": [p.get("reads") or ([p["name"]] if p["name"] else [])
                   for p in result["players"] if p["name"]],
+        # Niveau de QG et niveau du joueur, dans le meme ordre que `players`.
+        #
+        # Les deux etaient LUS puis jetes ici : read_hq_level tournait a chaque
+        # emplacement — jusqu'a six appels a Tesseract — et son resultat
+        # n'arrivait jamais en base. D'ou les "HQ ?" partout dans le bot, pour
+        # un travail qui avait pourtant deja ete paye.
+        "hq": [p.get("hq") for p in result["players"] if p["name"]],
+        "levels": [p.get("level") for p in result["players"] if p["name"]],
         "screen": position_from_name(path.name),
     }
 
@@ -123,8 +134,11 @@ def main():
 
     store = SystemStore()
     print("{} image(s) a traiter sur {}".format(len(todo), len(shots)))
+    # 21 s par image, chronometre sur un echantillon tire au hasard des 7538
+    # captures. L'estimation disait 5 s, valeur d'avant la lecture des niveaux :
+    # elle annoncait trois quarts d'heure pour un travail de trois heures.
     print("{} coeur(s) — estimation : {:.0f} min".format(
-        workers, len(todo) * 5 / workers / 60))
+        workers, len(todo) * SECONDS_PER_IMAGE / workers / 60))
     print("Base avant : {}\n".format(store.summary()))
 
     new = duplicates = unreadable = 0
@@ -151,7 +165,8 @@ def main():
                         len(result["players"])))
                 store.record(result["x"], result["y"], result["name"],
                              result["players"], screen=result["screen"],
-                             source=result["file"], reads=result.get("reads"))
+                             source=result["file"], reads=result.get("reads"),
+                             hq=result.get("hq"), levels=result.get("levels"))
 
             processed.add(result["file"])
 
