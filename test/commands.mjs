@@ -255,9 +255,12 @@ async function checkMap() {
   // Ni numero de ligne ni marque de pin (Noe trouvait ca moche) ; le QG est
   // aligne en colonne grace a des espaces "chiffre" apres le bloc gris.
   const lignes = numerote.split('\n').filter((l) => l.startsWith('`'));
-  report('/find : une ligne par planete, sans numero ni marque', lignes.join('|') === [
-    '`336,7`', '`336,7`', `\`338,10\`${F} HQ 5`, '`349,5`', '`359,11`',
-    '`512,340` HQ 5', '`512,340`'].join('|'), lignes.join(' | '));
+  // Dans l'ordre de saisie (demande de Noe) : le releve d'abord, puis les pins
+  // dans l'ordre ou ils ont ete faits — le 2e 336,7, pinne en dernier, arrive
+  // en dernier, bien qu'il ait les plus petites coordonnees.
+  report('/find : une ligne par planete, dans l\'ordre de saisie', lignes.join('|') === [
+    '`336,7`', `\`338,10\`${F} HQ 5`, '`349,5`', '`359,11`',
+    '`512,340` HQ 5', '`512,340`', '`336,7`'].join('|'), lignes.join(' | '));
   report('/find ne met aucun espace dans les blocs gris', lignes.every((l) => !/`[^`]*\s[^`]*`/.test(l)),
     lignes.join(' | '));
 
@@ -266,14 +269,14 @@ async function checkMap() {
   const cases = (row) => Array.from({ length: 12 }, (_, i) => row[`colonie_${i + 1}`]).filter(Boolean);
   let f = await fiche();
   report('les 24 cases ont une case par planete',
-    cases(f).join(' ') === '336,7 336,7 338,10 349,5 359,11 512,340 512,340', cases(f).join(' '));
+    cases(f).join(' ') === '336,7 338,10 349,5 359,11 512,340 512,340 336,7', cases(f).join(' '));
   report('chaque QG est dans la case voisine de sa planete',
-    f.colonie_3 === '338,10' && f.qg_3 === 5 && f.qg_1 === null && f.qg_6 === 5,
-    `colonie_3=${f.colonie_3} qg_3=${f.qg_3} qg_6=${f.qg_6}`);
+    f.colonie_2 === '338,10' && f.qg_2 === 5 && f.qg_1 === null && f.qg_5 === 5,
+    `colonie_2=${f.colonie_2} qg_2=${f.qg_2} qg_5=${f.qg_5}`);
 
   // /edit, ligne par ligne.
-  const e1 = keep(await run('edit', { player: 'Myra 2 delete' }));
-  report('/edit supprime une ligne pinnee', /line 2 .* deleted/.test(e1)
+  const e1 = keep(await run('edit', { player: 'Myra 7 delete' }));
+  report('/edit supprime une ligne pinnee', /line 7 .* deleted/.test(e1)
     && (await visibles(336, 7)).length === 1, e1.slice(0, 120));
   const e2 = keep(await run('edit', { player: 'Myra 1 delete' }));
   const { rows: masquee } = await sql.query(
@@ -290,7 +293,9 @@ async function checkMap() {
   report('les QG sont alignes en colonne', colonnes.length >= 2 && new Set(colonnes).size === 1,
     JSON.stringify(colonnes));
   const e4 = keep(await run('edit', { player: 'Myra 3 360,12' }));
-  report('/edit deplace une planete', e4.split('\n').includes('`360,12`')
+  // Deplacee, la planete garde sa place dans la liste (3e ligne).
+  report('/edit deplace une planete sans changer sa place',
+    e4.split('\n').filter((l) => l.startsWith('`'))[2] === '`360,12`'
     && (await visibles(359, 11)).length === 0, e4);
   const e5 = keep(await run('edit', { player: 'Myra 9 delete' }));
   report('/edit refuse une ligne inexistante', /has no line 9/.test(e5), e5);
@@ -304,7 +309,10 @@ async function checkMap() {
     for (const [x, y, hq] of fixture.spots) {
       numero[`${x},${y}`] = (numero[`${x},${y}`] ?? 0) + 1;
       await sql.query(
-        `INSERT INTO colonies (joueur_id, x, y, numero, qg, origine) VALUES ($1, $2, $3, $4, $5, 'releve')
+        // Date d'entree = date de capture, anterieure aux pins : comme la
+        // vraie publication.
+        `INSERT INTO colonies (joueur_id, x, y, numero, qg, origine, ajoute_le)
+         VALUES ($1, $2, $3, $4, $5, 'releve', to_timestamp(1))
          ON CONFLICT (joueur_id, x, y, numero) DO NOTHING`,
         [ids[fixture.name], x, y, numero[`${x},${y}`], hq]);
     }

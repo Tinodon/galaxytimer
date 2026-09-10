@@ -147,8 +147,12 @@ def publish(conn, by_id, rows):
                                 c["system"], c["score"], c["image"], c["at"]))
         cur.execute("""
             INSERT INTO colonies
-              (joueur_id, x, y, numero, qg, systeme, origine, confiance, image, vu_le)
+              (joueur_id, x, y, numero, qg, systeme, origine, confiance, image, vu_le,
+               ajoute_le)
             SELECT joueur_id, x, y, numero, qg, systeme, 'releve', confiance, image,
+                   COALESCE(to_timestamp(vu_le), now()),
+                   -- Date d'entree = date de capture : stable d'une publication
+                   -- a l'autre, et anterieure a tout pin fait ensuite.
                    COALESCE(to_timestamp(vu_le), now())
             FROM t_colonies
             ON CONFLICT (joueur_id, x, y, numero) DO NOTHING""")

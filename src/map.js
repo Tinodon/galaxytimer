@@ -31,10 +31,11 @@ export function flatten(name) {
     .replace(/[^a-z0-9]/g, '');
 }
 
-// Ordre unique de toutes les listes de planetes : x, y, puis numero dans le
-// systeme. C'est aussi l'ordre des lignes numerotees de /find, sur lesquelles
-// /edit s'appuie : un autre ordre ferait viser la mauvaise ligne.
-const PLANET_ORDER = 'x, y, numero';
+// Ordre unique de toutes les listes de planetes : dans l'ordre ou elles sont
+// entrees sur la carte (la premiere saisie en premier, demande de Noe), puis
+// x, y, numero pour departager. C'est aussi l'ordre des lignes de /find sur
+// lesquelles /edit s'appuie, et celui des 24 cases (rafraichir_cases).
+const PLANET_ORDER = 'ajoute_le, x, y, numero';
 
 const toSpot = (row) => ({
   x: row.x,
@@ -43,11 +44,12 @@ const toSpot = (row) => ({
   hq: row.qg ?? null,
   pinned: row.origine === 'pin',
   origin: row.origine,
+  addedAt: row.ajoute_le,
 });
 
 async function planetsOf(client, playerId) {
   const { rows } = await client.query(
-    `SELECT x, y, numero, qg, origine FROM colonies
+    `SELECT x, y, numero, qg, origine, ajoute_le FROM colonies
      WHERE joueur_id = $1 AND NOT masquee ORDER BY ${PLANET_ORDER}`,
     [Number(playerId)],
   );
@@ -157,12 +159,12 @@ async function upsertPlayer(client, player) {
  * Ajoute une planete pinnee a la prochaine place libre de ce systeme.
  * Les places masquees comptent comme prises : une correction ne se rouvre pas.
  */
-async function addPinned(client, playerId, { x, y, hq }, by) {
+async function addPinned(client, playerId, { x, y, hq }, by, addedAt = null) {
   await client.query(
-    `INSERT INTO colonies (joueur_id, x, y, numero, qg, origine, par, vu_le)
-     SELECT $1, $2, $3, COALESCE(max(numero), 0) + 1, $4, 'pin', $5, now()
+    `INSERT INTO colonies (joueur_id, x, y, numero, qg, origine, par, vu_le, ajoute_le)
+     SELECT $1, $2, $3, COALESCE(max(numero), 0) + 1, $4, 'pin', $5, now(), COALESCE($6, now())
      FROM colonies WHERE joueur_id = $1 AND x = $2 AND y = $3`,
-    [Number(playerId), x, y, hq ?? null, by],
+    [Number(playerId), x, y, hq ?? null, by, addedAt],
   );
 }
 
@@ -228,7 +230,9 @@ export async function editLine(playerId, line, change, by) {
       await hide();
     } else if (moves) {
       await hide();
-      await addPinned(client, id, { ...change.coords, hq: change.hq ?? target.hq }, by);
+      // La planete deplacee garde sa place dans la liste : sa date d'entree.
+      await addPinned(client, id, { ...change.coords, hq: change.hq ?? target.hq }, by,
+        target.addedAt);
     } else {
       // Meme place, nouveau QG : la ligne devient un pin, verifiee a l'oeil.
       await client.query(

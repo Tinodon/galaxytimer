@@ -59,7 +59,11 @@ CREATE TABLE IF NOT EXISTS colonies (
   -- Ligne du balayage corrigee a la main (/edit). Elle reste en base, cachee,
   -- pour que la prochaine publication ne la fasse pas revenir.
   masquee    boolean  NOT NULL DEFAULT false,
-  vu_le      timestamptz NOT NULL DEFAULT now()
+  vu_le      timestamptz NOT NULL DEFAULT now(),
+  -- Quand la ligne est entree sur la carte : capture pour le releve, commande
+  -- pour un pin. C'est l'ordre des lignes (la premiere saisie en premier), et
+  -- il ne bouge pas quand on corrige une ligne — contrairement a `vu_le`.
+  ajoute_le  timestamptz DEFAULT now()
 );
 
 -- Bases creees avant `numero` : on ajoute les colonnes et on remplace l'ancienne
@@ -67,6 +71,12 @@ CREATE TABLE IF NOT EXISTS colonies (
 -- Aucune ligne n'est supprimee.
 ALTER TABLE colonies ADD COLUMN IF NOT EXISTS numero  smallint NOT NULL DEFAULT 1;
 ALTER TABLE colonies ADD COLUMN IF NOT EXISTS masquee boolean  NOT NULL DEFAULT false;
+-- Lignes d'avant `ajoute_le` : leur `vu_le` est la meilleure date d'entree
+-- connue (capture, ou moment du pin). Un DEFAULT now() a l'ajout de la colonne
+-- leur aurait donne a toutes la meme date, et donc un ordre arbitraire.
+ALTER TABLE colonies ADD COLUMN IF NOT EXISTS ajoute_le timestamptz;
+UPDATE colonies SET ajoute_le = vu_le WHERE ajoute_le IS NULL;
+ALTER TABLE colonies ALTER COLUMN ajoute_le SET DEFAULT now();
 ALTER TABLE colonies DROP CONSTRAINT IF EXISTS colonies_joueur_id_x_y_key;
 CREATE UNIQUE INDEX IF NOT EXISTS colonies_planete ON colonies (joueur_id, x, y, numero);
 
@@ -77,7 +87,8 @@ CREATE INDEX IF NOT EXISTS colonies_coords ON colonies (x, y);
 -- Appelee par la publication (tous les joueurs), /pin et /edit : c'est la seule
 -- facon d'ecrire les cases, donc elles ne peuvent pas diverger de `colonies`.
 -- Une case par PLANETE : deux planetes dans le meme systeme occupent deux
--- cases avec la meme coordonnee. Ordre : x, y, puis numero — le meme que les
+-- cases avec la meme coordonnee. Ordre : date d'entree (la premiere saisie
+-- d'abord), puis x, y, numero pour departager — le meme que les
 -- lignes numerotees de /find. Lignes masquees exclues. Au-dela des planetes
 -- connues, les cases restent vides.
 CREATE OR REPLACE FUNCTION rafraichir_cases(ids bigint[]) RETURNS void
@@ -97,9 +108,9 @@ LANGUAGE sql AS $$
     colonie_12 = c.pos[12], qg_12 = c.qg[12]
   FROM (
     SELECT j2.id,
-           array_agg(col.x || ',' || col.y ORDER BY col.x, col.y, col.numero)
+           array_agg(col.x || ',' || col.y ORDER BY col.ajoute_le, col.x, col.y, col.numero)
              FILTER (WHERE col.joueur_id IS NOT NULL) AS pos,
-           array_agg(col.qg ORDER BY col.x, col.y, col.numero)
+           array_agg(col.qg ORDER BY col.ajoute_le, col.x, col.y, col.numero)
              FILTER (WHERE col.joueur_id IS NOT NULL) AS qg
     FROM joueurs j2
     LEFT JOIN colonies col ON col.joueur_id = j2.id AND NOT col.masquee
