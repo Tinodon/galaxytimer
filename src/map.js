@@ -60,6 +60,40 @@ export async function coloniesOfMany(playerIds) {
   return byPlayer;
 }
 
+/**
+ * Joueurs presents sur la carte, les plus cartographies d'abord (/list).
+ *
+ * Sert a verifier ce que la base contient vraiment. Chaque joueur vient avec
+ * son nombre de colonies connues ET son nombre de planetes selon l'API : plus
+ * de colonies que de planetes, c'est une attribution fausse, visible d'un coup.
+ *
+ * @returns {{ total: number, colonies: number, rows: {name, known, planets}[] }}
+ */
+export async function listPlayers({ search = '', page = 1, pageSize = 50 } = {}) {
+  const filter = search ? `%${search.toLowerCase()}%` : null;
+  const where = filter ? 'WHERE lower(j.pseudo) LIKE $1' : '';
+  const params = filter ? [filter] : [];
+
+  const { rows: [totals] } = await sql.query(
+    `SELECT count(DISTINCT j.id)::int AS total, count(*)::int AS colonies
+     FROM colonies c JOIN joueurs j ON j.id = c.joueur_id ${where}`,
+    params,
+  );
+  const { rows } = await sql.query(
+    `SELECT j.pseudo, j.nb_planetes, count(*)::int AS known
+     FROM colonies c JOIN joueurs j ON j.id = c.joueur_id ${where}
+     GROUP BY j.id, j.pseudo, j.nb_planetes
+     ORDER BY known DESC, lower(j.pseudo)
+     LIMIT ${Number(pageSize)} OFFSET ${(Number(page) - 1) * Number(pageSize)}`,
+    params,
+  );
+  return {
+    total: totals.total,
+    colonies: totals.colonies,
+    rows: rows.map((r) => ({ name: r.pseudo, known: r.known, planets: r.nb_planetes })),
+  };
+}
+
 /** Qui a une colonie sur cette case : [{ name, alliance, level, hq, system, pinned }]. */
 export async function whoAt(x, y) {
   const { rows } = await sql.query(

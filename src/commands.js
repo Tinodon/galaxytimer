@@ -120,6 +120,17 @@ export const definitions = [
     .toJSON(),
 
   new SlashCommandBuilder()
+    .setName('list')
+    .setDescription('Players on the map: /list, /list 2, /list myr')
+    // Un seul champ facultatif, comme /pin : une page, un bout de pseudo, ou
+    // les deux ("myr 2").
+    .addStringOption((o) =>
+      o.setName('filter')
+        .setDescription('A page number, part of a name, or both — e.g. 2, myr, myr 2')
+        .setRequired(false))
+    .toJSON(),
+
+  new SlashCommandBuilder()
     .setName('who')
     .setDescription('Who has a colony at these coordinates')
     .addStringOption((o) =>
@@ -469,6 +480,62 @@ async function handleMap(interaction) {
 }
 
 
+// 50 joueurs par page : les pseudos font 18 caracteres au plus, une page
+// tient donc toujours sous les 2000 caracteres d'un message Discord.
+const LIST_PAGE_SIZE = 50;
+
+/** "myr 2" -> { search: 'myr', page: 2 } ; "3" -> page 3 ; "" -> tout, page 1. */
+export function parseListInput(input) {
+  const tokens = String(input ?? '').trim().split(/\s+/).filter(Boolean);
+  let page = 1;
+  if (tokens.length && /^\d+$/.test(tokens[tokens.length - 1])) {
+    page = Math.max(1, Number(tokens.pop()));
+  }
+  return { search: tokens.join(' '), page };
+}
+
+/** Les joueurs de la carte, pour verifier ce que la base contient et copier un pseudo vers /find. */
+async function handleList(interaction) {
+  await interaction.deferReply();
+  if (!(await requireMap(interaction))) return;
+
+  const { search, page } = parseListInput(interaction.options.getString('filter'));
+  const result = await map.listPlayers({ search, page, pageSize: LIST_PAGE_SIZE });
+  const pages = Math.max(1, Math.ceil(result.total / LIST_PAGE_SIZE));
+
+  if (!result.total) {
+    await interaction.editReply(search
+      ? `No mapped player matches \`${search.replace(/`/g, '')}\`.`
+      : 'The map is empty.');
+    return;
+  }
+  if (!result.rows.length) {
+    await interaction.editReply(`Page ${page} does not exist — there are ${pages}.`);
+    return;
+  }
+
+  // "`Myra` 4/5" : colonies connues / planetes selon l'API. ⚠️ quand il y a
+  // plus de colonies que de planetes : au moins une attribution est fausse.
+  const entry = (r) => {
+    const name = `\`${String(r.name).replace(/`/g, '')}\``;
+    if (!Number.isFinite(r.planets) || r.planets <= 0) return `${name} ${r.known}`;
+    const warn = r.known > r.planets ? ' ⚠️' : '';
+    return `${name} ${r.known}/${r.planets}${warn}`;
+  };
+
+  const next = page < pages
+    ? ` — next: \`/list ${search ? `${search.replace(/`/g, '')} ` : ''}${page + 1}\``
+    : '';
+  const lines = [
+    `**${result.total}** player(s) on the map${search ? ` matching \`${search.replace(/`/g, '')}\`` : ''}` +
+      ` · ${result.colonies} colonies · page ${page}/${pages}${next}`,
+    'known colonies / planets they own',
+    '',
+    result.rows.map(entry).join(' · '),
+  ];
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
+}
+
 /** Qui a une colonie sur cette case. La recherche que la carte par pseudo ne permettait pas. */
 async function handleWho(interaction) {
   await interaction.deferReply();
@@ -590,6 +657,7 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'find') return handleFind(interaction);
   if (interaction.commandName === 'map') return handleMap(interaction);
   if (interaction.commandName === 'who') return handleWho(interaction);
+  if (interaction.commandName === 'list') return handleList(interaction);
 
   const item = ITEMS[interaction.commandName];
   if (!item) return undefined;

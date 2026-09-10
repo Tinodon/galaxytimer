@@ -14,7 +14,7 @@
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 
-import { handleCommand, handleAutocomplete, definitions } from '../src/commands.js';
+import { handleCommand, handleAutocomplete, definitions, parseListInput } from '../src/commands.js';
 import * as store from '../src/store.js';
 import { initStores } from '../src/boot.js';
 import * as sql from '../src/sql.js';
@@ -167,6 +167,24 @@ async function checkMap() {
   const whoDeux = await run('who', { coords: '1,2 3,4' });
   report('/who refuse plusieurs coordonnees', /one coordinate/i.test(String(whoDeux)),
     String(whoDeux).slice(0, 70));
+
+  // /list : ce que la base contient, pour verifier le releve.
+  const liste = keep(await run('list', {}));
+  report('/list montre les joueurs de la carte',
+    /Myra/.test(liste) && /HansWorsdt/.test(liste) && /Stijnjr/.test(liste), liste.slice(0, 200));
+  report('/list donne colonies connues / planetes', /`Myra` 4\/\d+/.test(liste), liste.slice(0, 200));
+  report('/list tient dans un message Discord', liste.length <= 2000, `${liste.length} caracteres`);
+  const listeFiltre = keep(await run('list', { filter: 'myr' }));
+  report('/list myr filtre par bout de pseudo',
+    /Myra/.test(listeFiltre) && !/HansWorsdt/.test(listeFiltre), listeFiltre.slice(0, 200));
+  const listeVide = keep(await run('list', { filter: 'zzzqqq' }));
+  report('/list gere un filtre sans resultat', /No mapped player/i.test(listeVide), listeVide);
+  const listeLoin = keep(await run('list', { filter: '99' }));
+  report('/list gere une page inexistante', /does not exist/i.test(listeLoin), listeLoin);
+  for (const [saisie, attendu] of [['', '|1'], ['3', '|3'], ['myr', 'myr|1'], ['myr 2', 'myr|2']]) {
+    const r = parseListInput(saisie);
+    report(`/list lit "${saisie}"`, `${r.search}|${r.page}` === attendu, `${r.search}|${r.page}`);
+  }
 
   // La saisie en une traite : le pseudo, puis les coordonnees lues depuis la fin.
   const lu = (text) => {

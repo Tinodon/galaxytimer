@@ -61,6 +61,8 @@ export function helpText() {
     '`/pin <player> <coords>` — add coordinates you saw yourself, in one go:',
     '`/pin John 512,340 601,299`. Pinned colonies show 📌 and win over the scanned map.',
     '`/who <coords>` — who has a colony there, e.g. `/who coords:359,11`.',
+    '`/list [page or name]` — every player on the map, most mapped first:',
+    '`/list`, `/list 2`, `/list myr`. ⚠️ = more colonies than they own.',
     'One map for everyone: a pin made on any server shows up everywhere.',
   );
 
