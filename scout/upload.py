@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
@@ -29,7 +31,6 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from db import load_env  # noqa: E402
-from names import canonical  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 RESOLVED_FILE = BASE_DIR / "data" / "systems_resolus.jsonl"
@@ -45,9 +46,26 @@ MIN_SCORE = 0.78
 TIMEOUT = 60
 
 
+def flatten(name):
+    """Copie EXACTE de `flatten` dans src/map.js : minuscules, accents retires,
+    seuls a-z et 0-9 gardes.
+
+    Le morceau ou l'on range un joueur doit etre celui ou le bot le cherchera.
+    On utilisait `canonical`, qui confond aussi les lettres que l'OCR melange
+    (S->b, L->i, O->0, U->i, Z->2, Q->g) : Stijnjr etait range dans "b", le bot
+    le cherchait dans "s", et /find repondait "aucune colonie". 18% des joueurs
+    publies — tous ceux commencant par S, L, O, Z, U ou Q — etaient ainsi
+    introuvables. La confusion de lettres sert a RECONNAITRE un pseudo lu,
+    jamais a ranger un pseudo deja reconnu.
+    """
+    name = unicodedata.normalize("NFD", str(name or "").lower())
+    name = "".join(c for c in name if not unicodedata.combining(c))
+    return re.sub("[^a-z0-9]", "", name)
+
+
 def shard_of(name):
-    flat = canonical(name)
-    return flat[0] if flat and flat[0].isalnum() else "_"
+    flat = flatten(name)
+    return flat[0] if flat else "_"
 
 
 def build_shards():

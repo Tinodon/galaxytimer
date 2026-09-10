@@ -218,6 +218,13 @@ async function main() {
   report('/find annonce le nombre de colonies',
     /colonies mapped/i.test(String(find)), String(find).slice(0, 90));
 
+  // Un pseudo en S : l'envoi rangeait ces joueurs dans le morceau "b" (regle
+  // des lettres confondables) pendant que le bot les cherchait dans "s". 18%
+  // des joueurs publies etaient introuvables, sans aucune erreur visible.
+  const findS = await run('find', { player: 'Stijnjr' });
+  report('/find trouve un joueur dont le pseudo commence par S',
+    /colonies mapped/i.test(String(findS)), String(findS).slice(0, 90));
+
   const findVide = await run('find', { player: 'badboytgr' });
   report('/find gere un joueur hors zone',
     /None mapped|colonies mapped/i.test(String(findVide)), String(findVide).slice(0, 70));
