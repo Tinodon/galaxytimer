@@ -340,46 +340,53 @@ const extras = (...parts) => parts.filter((p) => p !== null && p !== undefined &
  */
 const hqLabel = (hq) => (Number.isFinite(hq) ? `${namedEmoji('starbase')} ${hq}` : '');
 
-// Planete saisie a la main avec /pin. Un emoji plutot qu'un mot : demande de
-// Noe, ca se repere d'un coup d'oeil dans une liste.
-const PIN_MARK = '📌';
+// Espace "chiffre" (U+2007) : il a la largeur d'un chiffre. Mis APRES le bloc
+// gris, il compense les chiffres qui manquent a une coordonnee courte, pour
+// que les emojis de QG tombent en colonne. Un espace ordinaire est bien plus
+// etroit qu'un chiffre : le decalage resterait visible.
+const FIGURE_SPACE = ' ';
+
+const coordText = (spot) => `${spot.x},${spot.y}`;
 
 /**
- * "`336,7` <starbase> 5 📌" — coordonnees dans un bloc gris SERRE, sans espaces
- * de remplissage : Noe aime le bloc (lisible, copiable), pas les espaces qu'on
- * y mettait pour aligner. Rien apres les coordonnees si rien n'est connu.
+ * "`336,7`  <starbase> 5" — coordonnees dans un bloc gris SERRE (pas d'espace
+ * dedans : Noe l'a demande), puis le QG aligne sur la plus longue coordonnee
+ * de la liste (`width`). Ni numero de ligne ni marque de pin : Noe trouvait
+ * ca moche. Rien apres le bloc si le QG est inconnu.
  */
-function spotLine(spot) {
-  return [`\`${spot.x},${spot.y}\``, hqLabel(spot.hq), spot.pinned ? PIN_MARK : '']
-    .filter(Boolean)
-    .join(' ');
+function spotLine(spot, width = coordText(spot).length) {
+  const hq = hqLabel(spot.hq);
+  if (!hq) return `\`${coordText(spot)}\``;
+  const pad = FIGURE_SPACE.repeat(Math.max(0, width - coordText(spot).length));
+  return `\`${coordText(spot)}\`${pad} ${hq}`;
 }
 
 /**
- * Une ligne NUMEROTEE par planete, comme dans /find : "3 `336,7` <starbase> 5".
- * Ces numeros sont ceux que /edit attend ; la liste suit l'ordre de la base
- * (x, y, puis numero dans le systeme), le meme que celui de /edit.
+ * Une ligne par planete, QG en colonne. L'ordre est celui de la base (x, y,
+ * puis numero dans le systeme) : c'est aussi celui que /edit utilise, la
+ * premiere ligne est la ligne 1.
  */
-const numberedLines = (planets) => planets.map((spot, i) => `${i + 1} ${spotLine(spot)}`);
+function planetLines(planets) {
+  const width = Math.max(0, ...planets.map((spot) => coordText(spot).length));
+  return planets.map((spot) => spotLine(spot, width));
+}
 
 /**
  * Plusieurs planetes d'un joueur sur la meme case, regroupees pour une liste
- * sur une ligne (/map) : "`102,0`×6 <starbase> 5·3 📌".
+ * sur une ligne (/map) : "`102,0`×6 <starbase> 5·3".
  */
 function groupedSpots(planets) {
   const groups = new Map();
   for (const spot of planets) {
-    const key = `${spot.x},${spot.y}`;
-    const group = groups.get(key) ?? { key, count: 0, hqs: [], pinned: false };
+    const key = coordText(spot);
+    const group = groups.get(key) ?? { key, count: 0, hqs: [] };
     group.count += 1;
     if (Number.isFinite(spot.hq)) group.hqs.push(spot.hq);
-    group.pinned ||= spot.pinned;
     groups.set(key, group);
   }
   return [...groups.values()].map((g) => [
     `\`${g.key}\`${g.count > 1 ? `×${g.count}` : ''}`,
     g.hqs.length ? `${namedEmoji('starbase')} ${g.hqs.join('·')}` : '',
-    g.pinned ? PIN_MARK : '',
   ].filter(Boolean).join(' '));
 }
 
@@ -420,7 +427,7 @@ async function handlePin(interaction) {
   const result = await map.pin(playerRecord(user), entries, displayNameOf(interaction));
 
   const lines = [
-    `**${user.Name}** — **${result.added}** planet(s) added: ${entries.map(spotLine).join(' ')}`,
+    `**${user.Name}** — **${result.added}** planet(s) added: ${entries.map((e) => spotLine(e)).join(' ')}`,
     `${result.total} planet(s) recorded out of **${owned}** they own. ` +
       `\`/find ${user.Name}\` numbers them for \`/edit\`.`,
   ];
@@ -471,7 +478,7 @@ async function handleEdit(interaction) {
   const lines = [
     `**${user.Name}** — ${what}`,
     '',
-    ...(result.planets.length ? numberedLines(result.planets) : ['No mapped planet left.']),
+    ...(result.planets.length ? planetLines(result.planets) : ['No mapped planet left.']),
   ];
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
 }
@@ -505,7 +512,7 @@ async function handleFind(interaction) {
     `**${user.Name}** — ${extras(`level ${user.Level}`, user.AllianceId ?? 'no alliance')}`,
     `**${found.length}/${owned}** colonies mapped`,
     '',
-    ...numberedLines(found),
+    ...planetLines(found),
   ];
 
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
@@ -653,8 +660,7 @@ async function handleWho(interaction) {
         f.hqs.length ? `${namedEmoji('starbase')} ${f.hqs.join('·')}` : '',
       );
       const name = `**${f.name}**${f.count > 1 ? ` ×${f.count}` : ''}`;
-      const line = more ? `${name} · ${more}` : name;
-      return f.pinned ? `${line} ${PIN_MARK}` : line;
+      return more ? `${name} · ${more}` : name;
     }),
   ];
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });

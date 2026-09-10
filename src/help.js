@@ -48,12 +48,12 @@ export function helpText() {
     '`/alliance <name>` — level, war points, war status, member moves.',
     '',
     '**Map** — one map for every server',
-    '`/find <player>` — their planets, one numbered line each.',
+    '`/find <player>` — their planets, one line each.',
     '`/map <alliance>` — the same for every member.',
     '`/who <coords>` — who is there: `/who coords:359,11`.',
     '`/list [page or name]` — players on the map, A to Z. ⚠️ = more than they own.',
-    '`/pin <player> <coords> [HQ]` — add a planet: `/pin John 512,340 5`. 📌 = pinned.',
-    '`/edit <player> <line> ...` — fix a /find line: `/edit John 3 delete`,',
+    '`/pin <player> <coords> [HQ]` — add a planet: `/pin John 512,340 5`.',
+    '`/edit <player> <line> ...` — fix the 3rd line of /find: `/edit John 3 delete`,',
     '`/edit John 3 6` (HQ), `/edit John 3 512,341`, `/edit John 3 512,341 6`.',
   );
 

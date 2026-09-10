@@ -96,7 +96,10 @@ const FIXTURES = [
 
 // Ce qu'une reponse de carte ne doit JAMAIS afficher : un QG inconnu n'affiche
 // rien (demande explicite de Noe).
-const FORBIDDEN = /HQ \?|NaN|\bnull\b|\bundefined\b/;
+const FORBIDDEN = /HQ \?|NaN|\bnull\b|\bundefined\b|📌/;
+
+// Espace "chiffre" (U+2007), qui aligne les QG apres les blocs gris.
+const F = '\u2007';
 
 async function seedMap() {
   const ids = {};
@@ -248,10 +251,14 @@ async function checkMap() {
 
   // /find : une ligne numerotee par planete, dans l'ordre x, y, numero.
   const numerote = keep(await run('find', { player: 'Myra' }));
-  const lignes = numerote.split('\n').filter((l) => /^\d+ `/.test(l));
-  report('/find numerote une ligne par planete', lignes.join('|') === [
-    '1 `336,7`', '2 `336,7` 📌', '3 `338,10` HQ 5', '4 `349,5`', '5 `359,11`',
-    '6 `512,340` HQ 5 📌', '7 `512,340` 📌'].join('|'), lignes.join(' | '));
+  // Ni numero de ligne ni marque de pin (Noe trouvait ca moche) ; le QG est
+  // aligne en colonne grace a des espaces "chiffre" apres le bloc gris.
+  const lignes = numerote.split('\n').filter((l) => l.startsWith('`'));
+  report('/find : une ligne par planete, sans numero ni marque', lignes.join('|') === [
+    '`336,7`', '`336,7`', `\`338,10\`${F} HQ 5`, '`349,5`', '`359,11`',
+    '`512,340` HQ 5', '`512,340`'].join('|'), lignes.join(' | '));
+  report('/find ne met aucun espace dans les blocs gris', lignes.every((l) => !/`[^`]*\s[^`]*`/.test(l)),
+    lignes.join(' | '));
 
   // Les 24 cases : une par planete, meme coordonnee repetee.
   const fiche = async () => (await sql.query('SELECT * FROM joueurs WHERE id = $1', [ids.Myra])).rows[0];
@@ -273,9 +280,16 @@ async function checkMap() {
   report("/edit masque une ligne du releve au lieu de l'effacer",
     masquee[0]?.masquee === true && (await visibles(336, 7)).length === 0, e2.slice(0, 120));
   const e3 = keep(await run('edit', { player: 'Myra 2 6' }));
-  report('/edit change un QG', e3.includes('2 `349,5` HQ 6 📌'), e3);
+  report('/edit change un QG', e3.includes(`\`349,5\`${F}${F} HQ 6`), e3);
+  // Le QG tombe a la meme colonne sur toutes les lignes : meme nombre de
+  // caracteres (chiffres ou espaces "chiffre") avant lui.
+  const colonnes = e3.split('\n')
+    .filter((l) => l.startsWith('`') && l.includes(' HQ '))
+    .map((l) => l.indexOf(' HQ '));
+  report('les QG sont alignes en colonne', colonnes.length >= 2 && new Set(colonnes).size === 1,
+    JSON.stringify(colonnes));
   const e4 = keep(await run('edit', { player: 'Myra 3 360,12' }));
-  report('/edit deplace une planete', e4.includes('3 `360,12` 📌')
+  report('/edit deplace une planete', e4.split('\n').includes('`360,12`')
     && (await visibles(359, 11)).length === 0, e4);
   const e5 = keep(await run('edit', { player: 'Myra 9 delete' }));
   report('/edit refuse une ligne inexistante', /has no line 9/.test(e5), e5);
@@ -306,9 +320,9 @@ async function checkMap() {
   report("/who regroupe les planetes d'un joueur (×2)", /\*\*Stijnjr\*\* ×2/.test(who3), who3);
   const findS2 = keep(await run('find', { player: 'Stijnjr' }));
   report('/find liste chaque planete du meme systeme',
-    /1 `3,0`\n2 `3,0` HQ 4/.test(findS2), findS2);
+    /`3,0`\n`3,0` HQ 4/.test(findS2), findS2);
   const carte2 = keep(await run('map', { alliance: 'folk valley' }));
-  report('/map regroupe les planetes sur la meme case', carte2.includes('`512,340`×2 HQ 5 📌'), carte2);
+  report('/map regroupe les planetes sur la meme case', carte2.includes('`512,340`×2 HQ 5'), carte2);
   const spansMap = carte2.match(/`[^`]*`/g) ?? [];
   report('/map met chaque coordonnee dans un bloc gris sans espace',
     spansMap.length > 0 && spansMap.every((s) => /^`\d+,\d+`$/.test(s)), JSON.stringify(spansMap));
