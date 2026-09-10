@@ -12,11 +12,11 @@
 // que c'est justement le raccordement a ces deux services qu'on veut verifier.
 
 import 'dotenv/config';
+import { readFileSync } from 'node:fs';
 
 import { handleCommand, handleAutocomplete, definitions } from '../src/commands.js';
 import * as store from '../src/store.js';
-import * as intel from '../src/intel.js';
-import * as pins from '../src/pins.js';
+import { initStores } from '../src/boot.js';
 import { loadEmojis } from '../src/emoji.js';
 
 const GUILD = '796447983604072498';
@@ -47,17 +47,35 @@ function fakeInteraction(name, options = {}) {
       getBoolean: (key) => options[key] ?? null,
       getFocused: () => options.focused ?? '',
     },
-    async deferReply() { sent.deferred = true; },
-    async reply(payload) { sent.content = payload?.content ?? payload; },
-    async editReply(payload) { sent.content = payload?.content ?? payload; },
+    async deferReply() { sent.deferred = true; this.deferred = true; },
+    async reply(payload) {
+      if (sent.deferred) throw new Error('reply() apres deferReply() : Discord le refuse');
+      sent.content = payload?.content ?? payload;
+      this.replied = true;
+    },
+    async editReply(payload) { sent.content = payload?.content ?? payload; this.replied = true; },
+    deferred: false,
+    replied: false,
     async respond(choices) { sent.content = choices; },
     isRepliable: () => true,
   };
 }
 
+// Commandes restees "en train de reflechir" : differees, jamais completees.
+// C'est le symptome exact que voit l'utilisateur quand un gestionnaire plante
+// apres son deferReply.
+const hanging = [];
+
 async function run(name, options = {}) {
   const interaction = fakeInteraction(name, options);
-  await handleCommand(interaction);
+  try {
+    await handleCommand(interaction);
+  } catch (err) {
+    hanging.push(`/${name} a leve : ${err.message}`);
+  }
+  if (interaction.sent.deferred && interaction.sent.content == null) {
+    hanging.push(`/${name} differee sans reponse`);
+  }
   return interaction.sent.content;
 }
 
@@ -79,14 +97,21 @@ async function main() {
     .replace(/^\/([A-Za-z]:)/, '$1');
 
   const support = store.selectBackend().name;
-  await store.init();
-  await intel.init();
-  await pins.init();
+  // Le MEME chemin que le bot (src/boot.js). Ce controle faisait ses propres
+  // init, pins compris, alors que index.js oubliait les pins : /pin marchait
+  // ici et restait bloque en production.
+  await initStores();
 
   if (upstash.url) process.env.UPSTASH_REDIS_REST_URL = upstash.url;
   if (upstash.token) process.env.UPSTASH_REDIS_REST_TOKEN = upstash.token;
 
   report('les timers reels ne sont pas touches', support.includes('check.json'), support);
+
+  // Le bot doit demarrer ses stockages par le meme chemin que ce controle,
+  // sinon ce qui passe ici peut rester bloque en production.
+  const index = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
+  report('le bot initialise ses stockages via boot.js', index.includes('await initStores()'),
+    "src/index.js n'appelle pas initStores()");
 
   await loadEmojis({ application: { emojis: { fetch: async () => new Map() } } });
 
@@ -216,6 +241,9 @@ async function main() {
 
   // --- Menage ---
   store.forUser(USER, GUILD).forEach((t) => store.remove(t.key));
+
+  report('aucune commande ne reste "en train de reflechir"', hanging.length === 0,
+    hanging.join(' ; '));
 
   console.log(`\n${passed} controle(s) passes, ${failures.length} echec(s)`);
   if (failures.length) {

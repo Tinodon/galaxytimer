@@ -5,6 +5,7 @@ import * as store from './store.js';
 import { ITEM_LIST } from './items.js';
 import * as scheduler from './scheduler.js';
 import * as intel from './intel.js';
+import { initStores } from './boot.js';
 import { handleAutocomplete, handleCommand } from './commands.js';
 import { loadEmojis } from './emoji.js';
 import { loadLibrary, librarySize } from './artwork.js';
@@ -49,8 +50,7 @@ startHealthServer({
 });
 
 client.once(Events.ClientReady, async (c) => {
-  await store.init();
-  await intel.init();
+  await initStores();
   await loadEmojis(c);
   for (const folder of new Set(ITEM_LIST.map((i) => i.artwork).filter(Boolean))) {
     loadLibrary(folder);
@@ -76,11 +76,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isAutocomplete()) return await handleAutocomplete(interaction);
   } catch (err) {
     console.error('[bot] error while handling an interaction:', err);
-    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+    if (!interaction.isRepliable() || interaction.replied) return;
+    // Une commande DIFFEREE (deferReply) affiche "en train de reflechir"
+    // jusqu'a ce qu'on edite sa reponse. Sans cette branche, toute erreur apres
+    // le deferReply laissait le bot reflechir indefiniment — /pin, /find, /map,
+    // /scout et /alliance differont tous avant de toucher au reseau.
+    if (interaction.deferred) {
       await interaction
-        .reply({ content: 'Internal error, try again.', flags: 64 })
+        .editReply({ content: 'Something went wrong on my side — try again in a moment.' })
         .catch(() => {});
+      return;
     }
+    await interaction
+      .reply({ content: 'Internal error, try again.', flags: 64 })
+      .catch(() => {});
   }
 });
 
