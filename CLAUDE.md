@@ -141,6 +141,33 @@ disque ephemere. Deux consequences a ne jamais casser :
 Les ecritures distantes ne sont volontairement pas attendues : une interaction
 Discord doit repondre en moins de 3 secondes.
 
+## La carte : base SQL (Postgres chez Neon)
+
+La carte et les pins vivent dans Postgres (`DATABASE_URL`), les timers et
+l'intel dans Upstash. Les cles Upstash `galaxytimer:map:*` et `galaxytimer:pins`
+ne sont plus lues.
+
+- **Schema defini une seule fois** : `scout/schema.sql`, applique par le bot au
+  demarrage (`src/sql.js`) et par `scout/publish_sql.py`. Rejouable, rien n'y
+  est supprime.
+- `colonies` est la verite (une ligne par colonie, `origine` = `releve` ou
+  `pin`). Les 24 cases de `joueurs` (`colonie_n`, `qg_n`) ne s'ecrivent QUE par
+  `rafraichir_cases()` — jamais a la main, jamais en JS.
+- **Carte globale** : un pin est visible sur tous les serveurs. Choix de Noe :
+  le but est de cartographier tout le jeu.
+- La publication ne remplace que les colonies `releve` ; un pin l'emporte
+  toujours sur un releve a la meme coordonnee.
+- Recherches **par id de joueur** (obtenu via l'API), jamais par pseudo.
+- **Un QG inconnu n'affiche rien** sur Discord : ni `HQ ?`, ni `NaN`, ni
+  `null`. Verrouille par `test/commands.mjs`.
+- Une base injoignable ne bloque pas le demarrage : les timers tournent, les
+  commandes de carte repondent une erreur propre.
+- **Les tests n'ecrivent jamais dans le schema `public`** : `test/commands.mjs`
+  travaille dans le schema `essai` (`GALAXYTIMER_SQL_SCHEMA`), cree puis
+  supprime, et verifie que `public` n'a pas bouge.
+- En local sans Neon : `npx pglite-server --db=<dossier> --port=5433
+  --max-connections=10`, puis `DATABASE_URL=postgres://postgres@localhost:5433/postgres`.
+
 ## Tests
 
 `npm test` (`test/smoke.mjs`) simule le client Discord -- aucun token requis.

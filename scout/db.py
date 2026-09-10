@@ -37,7 +37,7 @@ def load_env() -> dict:
             values[key.strip()] = value.strip().strip('"').strip("'")
     # Une variable d'environnement reelle l'emporte sur le fichier.
     for key, value in os.environ.items():
-        if key.startswith("UPSTASH_") or key.startswith("GALAXYTIMER_"):
+        if key.startswith(("UPSTASH_", "GALAXYTIMER_", "DATABASE_")):
             values[key] = value
     return values
 

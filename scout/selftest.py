@@ -16,6 +16,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from match import level_growth_fits  # noqa: E402
 from names import best_match, looks_like_free_slot, similarity  # noqa: E402
 from popup import read_popup  # noqa: E402
 
@@ -39,14 +40,33 @@ def check(label, condition, detail=""):
         failures.append(label)
 
 
+def check_levels():
+    """Le controle par niveau, sur des cas reels verifies contre l'API.
+
+    Sans capture requise : il tourne toujours.
+    """
+    print("Controle par niveau (vignette -> API aujourd'hui) :")
+    # Vraie Myra : 89 sur la capture, 96 deux jours plus tard. L'ancienne
+    # regle (un cran d'ecart) l'aurait rejetee.
+    check("Myra 89 -> 96 acceptee", level_growth_fits(89, 96))
+    check("meme niveau accepte", level_growth_fits(128, 128))
+    # Fausses attributions reelles, trouvees sur les popups de truth.json.
+    for label, tile, api in [("Noster", 4, 101), ("Meowbah", 23, 281),
+                             ("IcyKat", 3, 0), ("SamuelAbel", 62, 0)]:
+        check("{} {} -> {} rejete".format(label, tile, api),
+              not level_growth_fits(tile, api))
+    print()
+
+
 def main():
+    check_levels()
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SHOT
     if not path.exists():
         # Les captures ne sont pas versionnees : elles montrent un ecran de jeu
         # et le depot est public. Sans elles, ce test n'a rien a verifier.
         print("Capture de reference absente : {}".format(path.name))
         print("Lance scout/calibrate.py, ouvre un popup de systeme, puis relance.")
-        return 0
+        return 1 if failures else 0
 
     print("Capture : {}\n".format(path.name))
     result = read_popup(Image.open(path))

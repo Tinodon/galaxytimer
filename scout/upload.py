@@ -68,14 +68,22 @@ def shard_of(name):
     return flat[0] if flat else "_"
 
 
-def build_shards():
-    """{lettre: {pseudo: [[x, y, qg], ...]}} a partir des systemes resolus."""
+def resolved_colonies():
+    """Les colonies publiables : une par (joueur, x, y), rattachee a un joueur reel.
+
+    SEULE definition de "colonie publiable", utilisee par l'envoi vers Upstash
+    et par la base SQL (publish_sql.py). Deux copies de ce filtre finiraient
+    par diverger, et les deux cartes ne diraient plus la meme chose.
+
+    Renvoie (colonies, gardees, ecartees) ; chaque colonie est un dict
+    {name, x, y, hq, system, score, image, at}.
+    """
     if not RESOLVED_FILE.exists():
         raise SystemExit(
             "Fichier absent : {}\nLance d'abord : python scout/resolve.py --write".format(
                 RESOLVED_FILE))
 
-    shards = defaultdict(lambda: defaultdict(list))
+    best = {}
     kept = skipped = 0
 
     with RESOLVED_FILE.open(encoding="utf-8") as handle:
@@ -84,28 +92,43 @@ def build_shards():
             if not line:
                 continue
             entry = json.loads(line)
-            for player in entry.get("players", []):
+            players = entry.get("players", [])
+            # Le niveau de QG est range au niveau du SYSTEME, dans une liste
+            # alignee sur `players`. On le lisait sur chaque joueur, ou il n'est
+            # jamais : tous les QG sortaient vides, meme ceux qui etaient lus.
+            hqs = entry.get("hq") or []
+            if len(hqs) != len(players):
+                hqs = [None] * len(players)
+
+            for player, hq in zip(players, hqs):
                 name = player.get("name")
                 if not name or player.get("score", 0) < MIN_SCORE:
                     skipped += 1
                     continue
                 kept += 1
-                shards[shard_of(name)][name].append(
-                    [entry["x"], entry["y"], player.get("hq")])
+                colony = {
+                    "name": name, "x": entry["x"], "y": entry["y"], "hq": hq,
+                    "system": entry.get("name"), "score": player.get("score"),
+                    "image": entry.get("source"), "at": entry.get("at"),
+                }
+                # Une meme colonie peut avoir ete vue depuis deux ecrans : on en
+                # garde une, en preferant celle dont le QG est connu.
+                key = (name, entry["x"], entry["y"])
+                current = best.get(key)
+                if current is None or (current["hq"] is None and hq is not None):
+                    best[key] = colony
 
-    # Une meme colonie peut avoir ete vue depuis deux ecrans : on dedoublonne
-    # sur les coordonnees, en gardant le niveau de QG connu s'il y en a un.
-    for names in shards.values():
-        for name, spots in names.items():
-            best = {}
-            for x, y, hq in spots:
-                current = best.get((x, y))
-                if current is None or (current is None and hq is not None):
-                    best[(x, y)] = hq
-                elif hq is not None:
-                    best[(x, y)] = hq
-            names[name] = [[x, y, hq] for (x, y), hq in sorted(best.items())]
+    colonies = sorted(best.values(), key=lambda c: (c["name"], c["x"], c["y"]))
+    return colonies, kept, skipped
 
+
+def build_shards():
+    """{lettre: {pseudo: [[x, y, qg], ...]}} a partir des systemes resolus."""
+    colonies, kept, skipped = resolved_colonies()
+    shards = defaultdict(lambda: defaultdict(list))
+    for colony in colonies:
+        shards[shard_of(colony["name"])][colony["name"]].append(
+            [colony["x"], colony["y"], colony["hq"]])
     return shards, kept, skipped
 
 

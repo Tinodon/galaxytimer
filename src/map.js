@@ -1,36 +1,27 @@
-// Acces a la carte relevee par le balayage.
+// La carte globale : qui a une colonie ou, et avec quel QG.
 //
-// Le balayage tourne sur le PC de Noe et publie ses resultats dans Upstash ;
-// le bot, heberge ailleurs, les lit ici. C'est le meme chemin que les timers.
+// Tout vit dans la base SQL (voir src/sql.js et scout/schema.sql) :
+//   - `colonies` : une ligne par colonie connue, relevee par le balayage ou
+//     saisie avec /pin. C'est la verite.
+//   - `joueurs` : un joueur par ligne avec ses 24 cases (12 colonies, 12 QG),
+//     recalculees depuis `colonies` par rafraichir_cases().
 //
-// La carte est DECOUPEE par premiere lettre du pseudo. Repondre a une recherche
-// ne charge donc qu'un morceau de quelques dizaines de kilo-octets au lieu de
-// toute la carte — et rien ne butera sur la limite de taille d'Upstash quand le
-// balayage s'etendra.
+// La carte est GLOBALE : un pin fait sur un serveur Discord est visible partout.
+// Le but est de cartographier tout le jeu, pas le renseignement d'une alliance.
+//
+// Les recherches se font par id de joueur, jamais par pseudo : le bot obtient
+// l'id aupres de l'API du jeu, qui tolere la casse et suit les changements de
+// pseudo. Chercher par pseudo, c'est ce qui avait rendu 18 % des joueurs
+// introuvables avec les morceaux Upstash rangés par premiere lettre.
 
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import * as sql from './sql.js';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+export const MAX_COLONIES = 12;
 
-const KEY_PREFIX = 'map:';
-const INDEX_KEY = 'map:index';
-
-// Un morceau reste en memoire un moment : plusieurs recherches d'affilee
-// portent souvent sur la meme lettre, et le contenu ne change qu'entre deux
-// balayages.
-const CACHE_MS = 10 * 60 * 1000;
-
-// Une ABSENCE ne se garde pas aussi longtemps qu'une presence. Sans ca, une
-// recherche faite juste avant une publication fige un "rien ici" pendant dix
-// minutes, et la carte fraichement publiee reste invisible sans raison
-// apparente.
-const MISS_CACHE_MS = 20 * 1000;
-
-const cache = new Map();
-
-/** Meme normalisation que cote balayage, sans quoi les cles ne coincideraient pas. */
+/**
+ * Forme reduite d'un pseudo : minuscules, sans accents, seulement a-z et 0-9.
+ * Copie exacte de `flatten` dans scout/upload.py.
+ */
 export function flatten(name) {
   return String(name ?? '')
     .toLowerCase()
@@ -39,83 +30,98 @@ export function flatten(name) {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function shardOf(name) {
-  const flat = flatten(name);
-  return flat ? flat[0] : '_';
+const toSpot = (row) => ({
+  x: row.x,
+  y: row.y,
+  hq: row.qg ?? null,
+  pinned: row.origine === 'pin',
+});
+
+/** Colonies connues d'un joueur, triees par coordonnees : [{ x, y, hq, pinned }]. */
+export async function coloniesOf(playerId) {
+  const { rows } = await sql.query(
+    'SELECT x, y, qg, origine FROM colonies WHERE joueur_id = $1 ORDER BY x, y',
+    [Number(playerId)],
+  );
+  return rows.map(toSpot);
+}
+
+/** Colonies de plusieurs joueurs en UNE requete : Map(id -> spots). */
+export async function coloniesOfMany(playerIds) {
+  const ids = playerIds.map(Number);
+  const byPlayer = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return byPlayer;
+  const { rows } = await sql.query(
+    `SELECT joueur_id, x, y, qg, origine FROM colonies
+     WHERE joueur_id = ANY($1::bigint[]) ORDER BY joueur_id, x, y`,
+    [ids],
+  );
+  for (const row of rows) byPlayer.get(Number(row.joueur_id))?.push(toSpot(row));
+  return byPlayer;
+}
+
+/** Qui a une colonie sur cette case : [{ name, alliance, level, hq, system, pinned }]. */
+export async function whoAt(x, y) {
+  const { rows } = await sql.query(
+    `SELECT j.pseudo, j.alliance, j.niveau, c.qg, c.systeme, c.origine
+     FROM colonies c JOIN joueurs j ON j.id = c.joueur_id
+     WHERE c.x = $1 AND c.y = $2
+     ORDER BY j.niveau DESC NULLS LAST, j.pseudo`,
+    [x, y],
+  );
+  return rows.map((row) => ({
+    name: row.pseudo,
+    alliance: row.alliance,
+    level: row.niveau,
+    hq: row.qg ?? null,
+    system: row.systeme,
+    pinned: row.origine === 'pin',
+  }));
 }
 
 /**
- * Lit une valeur brute, sans passer par le stockage des timers.
+ * Enregistre des coordonnees vues en jeu (/pin).
  *
- * Ce dernier enveloppe tout dans `{version, timers}` et ne rend que `timers` :
- * s'en servir ici renvoyait un objet vide pour chaque morceau de carte, sans
- * la moindre erreur — le bot repondait "aucune colonie" alors que la donnee
- * etait bien publiee. La carte a donc sa propre lecture, au format qu'elle
- * publie reellement.
- */
-async function readKey(key) {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (url && token) {
-    const base = String(url).trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
-    const response = await fetch(`${base}/get/${encodeURIComponent(`galaxytimer:${key}`)}`, {
-      headers: { Authorization: `Bearer ${String(token).trim().replace(/^["']|["']$/g, '')}` },
-    });
-    if (!response.ok) throw new Error(`Upstash ${response.status}`);
-    const raw = (await response.json()).result;
-    return raw ? JSON.parse(raw) : null;
-  }
-
-  // Hors production : un fichier depose a cote, pour pouvoir essayer en local.
-  const path = join(ROOT, 'data', `${key.replace(/:/g, '_')}.json`);
-  if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-async function loadShard(letter) {
-  const cached = cache.get(letter);
-  if (cached) {
-    const age = Date.now() - cached.at;
-    const limit = cached.data ? CACHE_MS : MISS_CACHE_MS;
-    if (age < limit) return cached.data;
-  }
-
-  let data = null;
-  try {
-    data = await readKey(KEY_PREFIX + letter);
-  } catch (err) {
-    console.error(`[map] could not read shard "${letter}": ${err.message}`);
-  }
-  cache.set(letter, { at: Date.now(), data });
-  return data;
-}
-
-/**
- * Colonies connues d'un joueur : [{ x, y, hq }].
+ * Dans une transaction : la fiche du joueur est creee ou mise a jour, chaque
+ * coordonnee devient un pin (une colonie deja relevee au meme endroit passe en
+ * pin, elle vient d'etre confirmee a l'oeil), puis ses 24 cases sont
+ * recalculees. Sans ce recalcul, la table `joueurs` ne montrerait pas le pin.
  *
- * La comparaison se fait sur la forme applatie, pas sur le pseudo affiche : le
- * joueur tape rarement la casse exacte, et le balayage a pu enregistrer une
- * variante.
+ * @param player { id, name, alliance, level, planets }
  */
-export async function coloniesOf(playerName) {
-  const shard = await loadShard(shardOf(playerName));
-  if (!shard) return null;
+export async function pin(player, coords, by) {
+  const id = Number(player.id);
+  return sql.transaction(async (client) => {
+    await client.query(
+      `INSERT INTO joueurs (id, pseudo, alliance, niveau, nb_planetes, maj)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (id) DO UPDATE SET
+         pseudo = EXCLUDED.pseudo, alliance = EXCLUDED.alliance,
+         niveau = EXCLUDED.niveau, nb_planetes = EXCLUDED.nb_planetes, maj = now()`,
+      [id, player.name, player.alliance ?? null, player.level ?? null, player.planets ?? null],
+    );
 
-  const wanted = flatten(playerName);
-  for (const [name, spots] of Object.entries(shard)) {
-    if (flatten(name) === wanted) {
-      return spots.map(([x, y, hq]) => ({ x, y, hq }));
+    let added = 0;
+    let updated = 0;
+    for (const { x, y } of coords) {
+      // xmax = 0 : la ligne vient d'etre inseree, sinon elle existait deja.
+      const { rows } = await client.query(
+        `INSERT INTO colonies (joueur_id, x, y, origine, par, vu_le)
+         VALUES ($1, $2, $3, 'pin', $4, now())
+         ON CONFLICT (joueur_id, x, y) DO UPDATE SET
+           origine = 'pin', par = EXCLUDED.par, vu_le = now()
+         RETURNING (xmax = 0) AS inserted`,
+        [id, x, y, by],
+      );
+      if (rows[0].inserted) added += 1;
+      else updated += 1;
     }
-  }
-  return [];
-}
 
-/** Etat de la carte publiee, ou null si aucun balayage n'a encore ete publie. */
-export async function mapStatus() {
-  try {
-    return await readKey(INDEX_KEY);
-  } catch {
-    return null;
-  }
+    await client.query('SELECT rafraichir_cases($1::bigint[])', [[id]]);
+    const { rows } = await client.query(
+      'SELECT count(*)::int AS total FROM colonies WHERE joueur_id = $1',
+      [id],
+    );
+    return { added, updated, total: rows[0].total };
+  });
 }

@@ -17,6 +17,10 @@ import { readFileSync } from 'node:fs';
 import { handleCommand, handleAutocomplete, definitions } from '../src/commands.js';
 import * as store from '../src/store.js';
 import { initStores } from '../src/boot.js';
+import * as sql from '../src/sql.js';
+import * as api from '../src/glapi.js';
+
+const TEST_SCHEMA = 'essai';
 import { loadEmojis } from '../src/emoji.js';
 
 const GUILD = '796447983604072498';
@@ -79,22 +83,141 @@ async function run(name, options = {}) {
   return interaction.sent.content;
 }
 
+// Colonies de depart du schema de test : de vrais joueurs (leurs ids viennent
+// de l'API, comme en production), de vraies coordonnees relevees.
+const FIXTURES = [
+  { name: 'Myra', spots: [[336, 7, null], [338, 10, 5], [349, 5, null], [359, 11, null]] },
+  { name: 'HansWorsdt', spots: [[359, 11, 7]] },
+  { name: 'Stijnjr', spots: [[3, 0, null]] },
+];
+
+// Ce qu'une reponse de carte ne doit JAMAIS afficher : un QG inconnu n'affiche
+// rien (demande explicite de Noe).
+const FORBIDDEN = /HQ \?|NaN|\bnull\b|\bundefined\b/;
+
+async function seedMap() {
+  const ids = {};
+  for (const fixture of FIXTURES) {
+    const user = await api.getUserByName(fixture.name);
+    ids[fixture.name] = Number(user.Id);
+    await sql.query(
+      `INSERT INTO joueurs (id, pseudo, alliance, niveau, nb_planetes) VALUES ($1, $2, $3, $4, $5)`,
+      [user.Id, user.Name, user.AllianceId ?? null, user.Level, user.Planets?.length ?? 0],
+    );
+    for (const [x, y, hq] of fixture.spots) {
+      await sql.query(
+        `INSERT INTO colonies (joueur_id, x, y, qg, systeme, origine)
+         VALUES ($1, $2, $3, $4, $5, 'releve')`,
+        [user.Id, x, y, hq, x === 359 && y === 11 ? 'DIADEM' : null],
+      );
+    }
+  }
+  await sql.query('SELECT rafraichir_cases($1::bigint[])', [Object.values(ids)]);
+  return ids;
+}
+
+async function checkMap() {
+  // La vraie carte ne doit pas bouger d'une ligne pendant le controle.
+  const realCount = async () => {
+    const { rows } = await sql.query(
+      "SELECT CASE WHEN to_regclass('public.colonies') IS NULL THEN -1 ELSE " +
+      '(SELECT count(*) FROM public.colonies) END AS n',
+    ).catch(() => ({ rows: [{ n: -1 }] }));
+    return Number(rows[0].n);
+  };
+  const before = await realCount();
+
+  const ids = await seedMap();
+  const outputs = [];
+  const keep = (text) => { outputs.push(String(text)); return String(text); };
+
+  const find = keep(await run('find', { player: 'Myra' }));
+  report('/find sort les coordonnees relevees',
+    /336,\s*7/.test(find) && /colonies mapped/i.test(find), find.slice(0, 90));
+  report('/find affiche le QG quand il est connu', /338,\s*10`\s+HQ 5/.test(find), find);
+
+  // Un pseudo en S : avec les morceaux Upstash, ces joueurs etaient ranges
+  // sous "b" et cherches sous "s" — 18 % d'introuvables. La base cherche par id.
+  const findS = keep(await run('find', { player: 'Stijnjr' }));
+  report('/find trouve un joueur dont le pseudo commence par S',
+    /colonies mapped/i.test(findS), findS.slice(0, 90));
+
+  const findVide = keep(await run('find', { player: 'badboytgr' }));
+  report('/find gere un joueur sans colonie connue', /None mapped/i.test(findVide),
+    findVide.slice(0, 70));
+
+  const carte = keep(await run('map', { alliance: 'folk valley' }));
+  report('/map trouve les membres cartographies', /Myra/.test(carte), carte.slice(0, 90));
+
+  const carteVide = await run('map', { alliance: 'nexiste-pas-du-tout' });
+  report('/map gere une alliance inexistante',
+    /No alliance found/i.test(String(carteVide)), String(carteVide).slice(0, 60));
+
+  const who = keep(await run('who', { coords: '359,11' }));
+  report('/who cite les joueurs de la case',
+    /Myra/.test(who) && /HansWorsdt/.test(who) && /DIADEM/.test(who), who.slice(0, 120));
+  const whoVide = keep(await run('who', { coords: '1,1' }));
+  report('/who gere une case inconnue', /Nobody known/i.test(whoVide), whoVide.slice(0, 70));
+  const whoDeux = await run('who', { coords: '1,2 3,4' });
+  report('/who refuse plusieurs coordonnees', /one coordinate/i.test(String(whoDeux)),
+    String(whoDeux).slice(0, 70));
+
+  // /pin ecrit dans la base, et la carte est globale.
+  const pin = keep(await run('pin', { player: 'Myra', coords: '512,340 601,299' }));
+  report('/pin accepte plusieurs paires', /\*\*2\*\* new/.test(pin), pin.slice(0, 80));
+
+  const repin = keep(await run('pin', { player: 'Myra', coords: '336,7' }));
+  report('/pin sur une colonie relevee la confirme', /1 already known/.test(repin),
+    repin.slice(0, 80));
+  const { rows: origine } = await sql.query(
+    'SELECT origine FROM colonies WHERE joueur_id = $1 AND x = 336 AND y = 7', [ids.Myra]);
+  report('un pin prime sur le releve a la meme coordonnee', origine[0]?.origine === 'pin',
+    JSON.stringify(origine));
+
+  // Les 24 cases de la table joueurs suivent /pin sans autre intervention.
+  const { rows: [fiche] } = await sql.query('SELECT * FROM joueurs WHERE id = $1', [ids.Myra]);
+  const cases = Array.from({ length: 12 }, (_, i) => fiche[`colonie_${i + 1}`]).filter(Boolean);
+  report('les 24 cases de Myra incluent ses pins',
+    cases.length === 6 && cases.includes('512,340') && cases.includes('601,299'),
+    JSON.stringify(cases));
+  report('chaque QG est dans la case voisine de sa colonie',
+    fiche.colonie_2 === '338,10' && fiche.qg_2 === 5 && fiche.qg_1 === null,
+    `colonie_2=${fiche.colonie_2} qg_2=${fiche.qg_2} qg_1=${fiche.qg_1}`);
+
+  const apresPin = keep(await run('find', { player: 'Myra' }));
+  report('/find ressort les pins, marques comme tels',
+    /512,\s*340`\s+pinned/.test(apresPin), apresPin.slice(0, 200));
+
+  const pinNul = await run('pin', { player: 'Myra', coords: 'nawak' });
+  report('/pin refuse des coordonnees illisibles',
+    /No coordinates found/i.test(String(pinNul)), String(pinNul).slice(0, 70));
+
+  const bad = outputs.filter((text) => FORBIDDEN.test(text));
+  report('aucune reponse de carte n\'affiche "HQ ?", NaN, null ou undefined', !bad.length,
+    bad.map((t) => t.match(FORBIDDEN)[0]).join(', '));
+
+  report('la vraie carte (schema public) n\'est pas touchee', (await realCount()) === before,
+    `${before} -> ${await realCount()} colonies`);
+}
+
 async function main() {
   console.log('Verification de toutes les commandes\n');
 
   // Les timers reels vivent dans Upstash. Ce controle en cree et en arrete :
   // s'il ecrivait la-bas, il effacerait les timers en cours de vraies
-  // personnes. On masque donc les identifiants le temps des trois `init`, qui
-  // figent chacun leur support — ensuite on les rend, parce que la carte, elle,
-  // doit bien etre lue dans Upstash.
-  const upstash = {
-    url: process.env.UPSTASH_REDIS_REST_URL,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN,
-  };
+  // personnes. On retire donc les identifiants Upstash : les stockages
+  // retombent sur un fichier de test.
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
   process.env.GALAXYTIMER_DB = new URL('../data/timers.check.json', import.meta.url).pathname
     .replace(/^\/([A-Za-z]:)/, '$1');
+
+  // Meme principe pour la carte : elle est GLOBALE, un faux pin ecrit ici
+  // apparaitrait sur tous les serveurs. Tout se passe dans un schema a part,
+  // vide au depart et supprime a la fin ; le schema `public` (la vraie carte)
+  // n'est jamais touche.
+  process.env.GALAXYTIMER_SQL_SCHEMA = TEST_SCHEMA;
+  if (sql.configured()) await sql.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
 
   const support = store.selectBackend().name;
   // Le MEME chemin que le bot (src/boot.js). Ce controle faisait ses propres
@@ -102,10 +225,9 @@ async function main() {
   // ici et restait bloque en production.
   await initStores();
 
-  if (upstash.url) process.env.UPSTASH_REDIS_REST_URL = upstash.url;
-  if (upstash.token) process.env.UPSTASH_REDIS_REST_TOKEN = upstash.token;
-
   report('les timers reels ne sont pas touches', support.includes('check.json'), support);
+  report('la base de la carte est configuree (DATABASE_URL)', sql.configured(),
+    'DATABASE_URL absent du .env : /pin, /find, /map et /who ne peuvent pas marcher');
 
   // Le bot doit demarrer ses stockages par le meme chemin que ce controle,
   // sinon ce qui passe ici peut rester bloque en production.
@@ -181,21 +303,6 @@ async function main() {
     (suggestions ?? []).every((c) => c.value === '__all__' || store.get(c.value)),
     'une suggestion pointe sur un timer inexistant');
 
-  // --- Les coordonnees a la main ---
-  console.log('\nPIN');
-  const pin = await run('pin', { player: 'Myra', coords: '512,340 601,299' });
-  report('/pin accepte plusieurs paires',
-    /\*\*2\*\* new/.test(String(pin)), String(pin).slice(0, 80));
-
-  const apresPin = await run('find', { player: 'Myra' });
-  report('/find ressort ce que /pin a enregistre',
-    /512,\s*340/.test(String(apresPin)), String(apresPin).slice(0, 90));
-
-  const pinNul = await run('pin', { player: 'Myra', coords: 'nawak' });
-  report('/pin refuse des coordonnees illisibles',
-    !/^\*\*/.test(String(pinNul)) || /could not|no coordinate/i.test(String(pinNul)),
-    String(pinNul).slice(0, 70));
-
   // --- L'intel, qui touche l'API du jeu ---
   console.log('\nINTEL (API du jeu)');
   const scout = await run('scout', { player: 'Myra' });
@@ -210,32 +317,9 @@ async function main() {
   report('/alliance trouve une alliance reelle',
     /Folk Valley/i.test(String(alliance)), String(alliance).slice(0, 70));
 
-  // --- La carte, qui touche Upstash ---
-  console.log('\nCARTE (Upstash)');
-  const find = await run('find', { player: 'Myra' });
-  report('/find sort les coordonnees du balayage',
-    /336,\s*7|336,7/.test(String(find).replace(/\s+/g, ' ')), String(find).slice(0, 90));
-  report('/find annonce le nombre de colonies',
-    /colonies mapped/i.test(String(find)), String(find).slice(0, 90));
-
-  // Un pseudo en S : l'envoi rangeait ces joueurs dans le morceau "b" (regle
-  // des lettres confondables) pendant que le bot les cherchait dans "s". 18%
-  // des joueurs publies etaient introuvables, sans aucune erreur visible.
-  const findS = await run('find', { player: 'Stijnjr' });
-  report('/find trouve un joueur dont le pseudo commence par S',
-    /colonies mapped/i.test(String(findS)), String(findS).slice(0, 90));
-
-  const findVide = await run('find', { player: 'badboytgr' });
-  report('/find gere un joueur hors zone',
-    /None mapped|colonies mapped/i.test(String(findVide)), String(findVide).slice(0, 70));
-
-  const carte = await run('map', { alliance: 'folk valley' });
-  report('/map trouve les membres cartographies',
-    /Myra/.test(String(carte)), String(carte).slice(0, 90));
-
-  const carteVide = await run('map', { alliance: 'nexiste-pas-du-tout' });
-  report('/map gere une alliance inexistante',
-    /No alliance found/i.test(String(carteVide)), String(carteVide).slice(0, 60));
+  // --- La carte, dans la base SQL (schema de test) ---
+  console.log(`\nCARTE (base SQL, schema "${TEST_SCHEMA}")`);
+  if (sql.configured()) await checkMap();
 
   // --- L'aide ---
   console.log('\nAIDE');
@@ -251,6 +335,11 @@ async function main() {
 
   report('aucune commande ne reste "en train de reflechir"', hanging.length === 0,
     hanging.join(' ; '));
+
+  if (sql.configured()) {
+    await sql.query(`DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE`);
+    await sql.close();
+  }
 
   console.log(`\n${passed} controle(s) passes, ${failures.length} echec(s)`);
   if (failures.length) {

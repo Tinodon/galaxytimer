@@ -34,6 +34,7 @@ DATA_DIR = BASE_DIR / "data"
 ROSTER_FILE = DATA_DIR / "roster.json"
 STATE_FILE = DATA_DIR / "roster_state.json"
 LEVELS_FILE = DATA_DIR / "roster_niveaux.json"
+PLAYERS_FILE = DATA_DIR / "roster_joueurs.json"
 
 ALPHABET = string.ascii_lowercase + string.digits
 
@@ -63,11 +64,19 @@ def fetch(pair):
         text = response.text.strip()
         if not text.startswith("["):
             return pair, {}, "reponse inattendue"
-        # Le niveau vient dans la meme reponse et ne coute donc rien de plus.
-        # Il sert a departager deux pseudos egalement plausibles pour une meme
-        # lecture : la vignette du jeu affiche le niveau, l'API aussi.
+        # Tout ce qui suit vient dans la meme reponse et ne coute rien de plus :
+        #   - l'Id, stable meme si le joueur change de pseudo : c'est la cle de
+        #     la base SQL ;
+        #   - l'alliance, pour la carte par alliance ;
+        #   - le niveau, qui departage deux pseudos egalement plausibles pour une
+        #     meme lecture (la vignette du jeu l'affiche aussi) ;
+        #   - le nombre de planetes, soit le nombre de cases a remplir.
         users = [u for u in json.loads(text) if u.get("Name")]
-        return pair, {u["Name"]: u.get("Level") for u in users}, None
+        return pair, {
+            u["Name"]: [u.get("Id"), u.get("AllianceId"), u.get("Level"),
+                        len(u.get("Planets") or [])]
+            for u in users
+        }, None
     except Exception as error:  # noqa: BLE001
         return pair, {}, str(error)[:60]
 
@@ -81,10 +90,15 @@ def load(path, default):
     return default
 
 
-def save_roster(names, levels=None):
+def save_roster(names, levels=None, players=None):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ROSTER_FILE.write_text(json.dumps(sorted(names), ensure_ascii=False),
                            encoding="utf-8")
+    # Fiche complete par joueur, pour la base SQL :
+    # {pseudo: [id, alliance, niveau, nb_planetes]}.
+    if players:
+        PLAYERS_FILE.write_text(json.dumps(players, ensure_ascii=False),
+                                encoding="utf-8")
     # Fichier separe : le dictionnaire de noms reste lisible par tout ce qui
     # existe deja, et un relevé sans niveaux continue de fonctionner.
     if levels:
@@ -108,6 +122,7 @@ def build(only_failed=False, reset=False):
     """
     names = set(load(ROSTER_FILE, []))
     levels = load(LEVELS_FILE, {})
+    players = load(PLAYERS_FILE, {})
     state = load(STATE_FILE, {"done": [], "failed": []})
     done, failed = set(state["done"]), set(state["failed"])
 
@@ -142,14 +157,15 @@ def build(only_failed=False, reset=False):
                 done.add(pair)
                 before = len(names)
                 names.update(found)
-                levels.update({k: v for k, v in found.items() if v is not None})
+                levels.update({k: v[2] for k, v in found.items() if v[2] is not None})
+                players.update(found)
                 gained = len(names) - before
                 if gained:
                     print("  {} -> {:>6} noms, {:>5} nouveaux  (total {})".format(
                         pair, len(found), gained, len(names)))
 
             if processed % 25 == 0:
-                save_roster(names, levels)
+                save_roster(names, levels, players)
                 save_state({"done": sorted(done), "failed": sorted(failed)})
                 rate = processed / max(time.time() - started, 1)
                 left = (len(todo) - processed) / max(rate, 0.001) / 60
@@ -158,7 +174,7 @@ def build(only_failed=False, reset=False):
 
     # Les niveaux aussi : seules les sauvegardes intermediaires les gardaient,
     # donc les derniers couples interroges les perdaient a l'arrivee.
-    save_roster(names, levels)
+    save_roster(names, levels, players)
     save_state({"done": sorted(done), "failed": sorted(failed)})
     print("\n{} pseudo(s) au dictionnaire, {} avec niveau".format(
         len(names), len(levels)))

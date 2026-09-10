@@ -68,15 +68,29 @@ def _level_fits(name, level, levels):
     l'absence de preuve n'est pas une preuve d'absence, et rejeter dans le
     doute perdrait bien plus de colonies que la mesure n'en sauve.
 
-    Une tolerance d'un cran couvre le decalage entre le moment de la capture et
-    celui de l'interrogation de l'API — le joueur a pu monter d'un niveau.
+    La vignette date de la capture, l'API d'aujourd'hui : entre les deux, le
+    joueur a pu monter, parfois beaucoup (Myra : 89 sur la capture, 96 deux
+    jours plus tard). L'ancienne regle, un cran d'ecart dans un sens ou dans
+    l'autre, aurait rejete la vraie Myra. D'ou une regle a sens unique :
+      - l'API ne peut pas etre SOUS la vignette (un niveau ne redescend pas ;
+        un cran de marge pour une lecture limite) ;
+      - elle peut etre au-dessus, dans une limite : max(15, 25 % du niveau lu).
+    Ce qui rejette toujours NOSTER -> Noster (vignette 4, API 101) ou
+    Meowbah (23 -> 281), les fausses attributions que ce controle vise.
     """
     if level is None or not levels:
         return True
     known = levels.get(name)
     if known is None:
         return True
-    return abs(int(known) - int(level)) <= 1
+    return level_growth_fits(int(level), int(known))
+
+
+def level_growth_fits(on_tile, now):
+    """Un joueur lu au niveau `on_tile` peut-il etre au niveau `now` aujourd'hui ?"""
+    if now < on_tile - 1:
+        return False
+    return now - on_tile <= max(15, on_tile * 0.25)
 
 
 class Roster:

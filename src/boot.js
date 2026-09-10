@@ -13,10 +13,15 @@
 
 import * as store from './store.js';
 import * as intel from './intel.js';
-import * as pins from './pins.js';
+import * as sql from './sql.js';
 
 export async function initStores() {
   await store.init();
   await intel.init();
-  await pins.init();
+  // La carte vit dans Postgres (pins compris). Une base injoignable ne doit
+  // pas empecher les timers de demarrer : on le signale et on continue, les
+  // commandes de carte repondront une erreur propre.
+  await sql.init().catch((err) => {
+    console.error('[sql] map database unreachable at startup:', err.message);
+  });
 }

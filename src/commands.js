@@ -18,7 +18,7 @@ import * as intel from './intel.js';
 import { playerReport, allianceReport, fit } from './intelview.js';
 import * as pins from './pins.js';
 import * as map from './map.js';
-import { discordRelative } from './duration.js';
+import * as sql from './sql.js';
 
 // Le message nomme son proprietaire mais ne doit pinger personne : seul le ping
 // de fin de timer a le droit de notifier.
@@ -119,6 +119,12 @@ export const definitions = [
       o.setName('alliance').setDescription('Alliance name').setRequired(true))
     .toJSON(),
 
+  new SlashCommandBuilder()
+    .setName('who')
+    .setDescription('Who has a colony at these coordinates')
+    .addStringOption((o) =>
+      o.setName('coords').setDescription('One coordinate, e.g. 359,11').setRequired(true))
+    .toJSON(),
 
   new SlashCommandBuilder()
     .setName('glhelp')
@@ -297,8 +303,30 @@ async function handleAlliance(interaction) {
   });
 }
 
-/** Ligne "(512,340) — par X, il y a 2 jours". */
-const pinLine = (c) => `\`(${String(c.x).padStart(4)},${String(c.y).padStart(4)})\` — ${c.by}, ${discordRelative(c.at)}`;
+/**
+ * Morceaux optionnels d'une ligne, joints par " · ".
+ *
+ * Une information absente n'apparait PAS : ni "HQ ?", ni "NaN", ni "null".
+ * Noe l'a demande explicitement — un QG pas encore lu n'est pas une donnee a
+ * afficher.
+ */
+const extras = (...parts) => parts.filter((p) => p !== null && p !== undefined && p !== '').join(' · ');
+
+const hqLabel = (hq) => (Number.isFinite(hq) ? `HQ ${hq}` : '');
+
+/** "`  336,   7`  HQ 5 · pinned" — rien apres les coordonnees si rien n'est connu. */
+function spotLine(spot) {
+  const coords = `\`${String(spot.x).padStart(4)},${String(spot.y).padStart(4)}\``;
+  const more = extras(hqLabel(spot.hq), spot.pinned ? 'pinned' : '');
+  return more ? `${coords}  ${more}` : coords;
+}
+
+/** Repond proprement quand la base de la carte n'est pas configuree. */
+async function requireMap(interaction) {
+  if (sql.configured()) return true;
+  await interaction.editReply('The map database is not configured on this bot yet.');
+  return false;
+}
 
 async function handlePin(interaction) {
   await interaction.deferReply();
@@ -308,6 +336,7 @@ async function handlePin(interaction) {
     await interaction.editReply(error);
     return;
   }
+  if (!(await requireMap(interaction))) return;
 
   // On resout le joueur via l'API : le releve est ainsi rattache a un id
   // stable, meme si la personne change de pseudo.
@@ -317,25 +346,33 @@ async function handlePin(interaction) {
     return;
   }
 
-  const result = pins.pin(
-    interaction.guildId,
-    { id: user.Id, name: user.Name },
+  const known = user.Planets?.length ?? 0;
+  const result = await map.pin(
+    {
+      id: user.Id,
+      name: user.Name,
+      alliance: user.AllianceId ?? null,
+      level: user.Level ?? null,
+      planets: known,
+    },
     coords,
     displayNameOf(interaction),
   );
 
-  const known = user.Planets?.length ?? 0;
   const parts = [];
   if (result.added) parts.push(`**${result.added}** new`);
   if (result.updated) parts.push(`${result.updated} already known`);
 
-  await interaction.editReply({
-    content: [
-      `**${user.Name}** — ${parts.join(', ')}.`,
-      `${result.total} coordinate(s) recorded out of **${known}** colonies they own.`,
-    ].join('\n'),
-    allowedMentions: NO_PING,
-  });
+  const lines = [
+    `**${user.Name}** — ${parts.join(', ')}.`,
+    `${result.total} coordinate(s) recorded out of **${known}** colonies they own.`,
+  ];
+  // Plus de coordonnees que de planetes : l'une d'elles est forcement fausse.
+  if (result.total > (known || map.MAX_COLONIES)) {
+    lines.push('That is more than they can own — one of these coordinates is probably wrong.');
+  }
+
+  await interaction.editReply({ content: lines.join('\n'), allowedMentions: NO_PING });
 }
 
 async function handleFind(interaction) {
@@ -350,21 +387,12 @@ async function handleFind(interaction) {
 
   const owned = user.Planets?.length ?? 0;
 
-  // Deux sources : le balayage automatique, et ce que les membres ont saisi a
-  // la main. La saisie manuelle prime — elle vient d'un joueur qui vient de
-  // regarder, le balayage d'une reconnaissance d'image datant de la veille.
-  const scanned = (await map.coloniesOf(user.Name).catch(() => null)) ?? [];
-  const pinned = pins.forPlayer(interaction.guildId, user.Id)?.coords ?? [];
+  // Une seule source : la base. Releve et pins y sont deja fusionnes, le pin
+  // l'emportant sur une meme coordonnee (voir scout/publish_sql.py).
+  if (!(await requireMap(interaction))) return;
+  const found = await map.coloniesOf(user.Id);
 
-  const spots = new Map();
-  for (const spot of scanned) {
-    spots.set(`${spot.x},${spot.y}`, { ...spot, source: 'scan' });
-  }
-  for (const spot of pinned) {
-    spots.set(`${spot.x},${spot.y}`, { ...spot, source: 'pin' });
-  }
-
-  if (!spots.size) {
+  if (!found.length) {
     await interaction.editReply(
       `**${user.Name}** owns **${owned}** colonies. None mapped yet — ` +
       `record what you see with \`/pin\`.`,
@@ -372,16 +400,11 @@ async function handleFind(interaction) {
     return;
   }
 
-  const found = [...spots.values()].sort((a, b) => a.x - b.x || a.y - b.y);
   const lines = [
-    `**${user.Name}** — level ${user.Level} · ${user.AllianceId ?? 'no alliance'}`,
+    `**${user.Name}** — ${extras(`level ${user.Level}`, user.AllianceId ?? 'no alliance')}`,
     `**${found.length}/${owned}** colonies mapped`,
     '',
-    ...found.map((spot) => {
-      const hq = spot.hq ? `HQ ${spot.hq}` : 'HQ ?';
-      const mark = spot.source === 'pin' ? ' · pinned' : '';
-      return `\`${String(spot.x).padStart(4)},${String(spot.y).padStart(4)}\`  ${hq}${mark}`;
-    }),
+    ...found.map(spotLine),
   ];
 
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
@@ -398,27 +421,22 @@ async function handleMap(interaction) {
   }
 
   const members = alliance.Members ?? [];
-  const pinned = pins.all(interaction.guildId);
+  if (!(await requireMap(interaction))) return;
+
+  // La liste des membres vient de l'API (toujours a jour), leurs colonies de
+  // la base, en UNE requete pour toute l'alliance. Un membre sans colonie
+  // connue n'apparait pas plutot que d'apparaitre vide.
+  const colonies = await map.coloniesOfMany(members.map((m) => m.Id));
   const rows = [];
   let mapped = 0;
 
-  // Comme /find : les deux sources, la saisie manuelle par-dessus le balayage.
-  // Un membre absent des deux n'apparait pas plutot que d'apparaitre vide.
   for (const member of members) {
-    const spots = new Map();
+    const spots = colonies.get(Number(member.Id)) ?? [];
+    if (!spots.length) continue;
 
-    for (const spot of (await map.coloniesOf(member.Name).catch(() => null)) ?? []) {
-      spots.set(`${spot.x},${spot.y}`, spot);
-    }
-    for (const spot of pinned[String(member.Id)]?.coords ?? []) {
-      spots.set(`${spot.x},${spot.y}`, spot);
-    }
-    if (!spots.size) continue;
-
-    mapped += spots.size;
-    const list = [...spots.values()]
-      .sort((a, b) => a.x - b.x || a.y - b.y)
-      .map((s) => `\`${s.x},${s.y}\``)
+    mapped += spots.length;
+    const list = spots
+      .map((s) => `\`${s.x},${s.y}\`${Number.isFinite(s.hq) ? ` HQ ${s.hq}` : ''}`)
       .join(' ');
     rows.push(`**${member.Name}** (lvl ${member.Level}) — ${list}`);
   }
@@ -443,6 +461,46 @@ async function handleMap(interaction) {
   });
 }
 
+
+/** Qui a une colonie sur cette case. La recherche que la carte par pseudo ne permettait pas. */
+async function handleWho(interaction) {
+  await interaction.deferReply();
+  const { coords, error } = pins.parseCoords(interaction.options.getString('coords'));
+  if (error) {
+    await interaction.editReply(error);
+    return;
+  }
+  if (coords.length !== 1) {
+    await interaction.editReply('Give one coordinate at a time, e.g. `359,11`.');
+    return;
+  }
+  if (!(await requireMap(interaction))) return;
+
+  const [{ x, y }] = coords;
+  const found = await map.whoAt(x, y);
+  if (!found.length) {
+    await interaction.editReply(
+      `Nobody known at **${x},${y}** — not scanned yet, or only free planets there.`,
+    );
+    return;
+  }
+
+  const system = found.find((f) => f.system)?.system;
+  const lines = [
+    `**${system ? `${system} ` : ''}(${x},${y})** — ${found.length} player(s)`,
+    '',
+    ...found.map((f) => {
+      const more = extras(
+        f.alliance,
+        Number.isFinite(f.level) ? `lvl ${f.level}` : '',
+        hqLabel(f.hq),
+        f.pinned ? 'pinned' : '',
+      );
+      return more ? `**${f.name}** · ${more}` : `**${f.name}**`;
+    }),
+  ];
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
+}
 
 async function handleHelp(interaction) {
   await interaction.reply({ content: helpText(), allowedMentions: NO_PING });
@@ -524,6 +582,7 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'pin') return handlePin(interaction);
   if (interaction.commandName === 'find') return handleFind(interaction);
   if (interaction.commandName === 'map') return handleMap(interaction);
+  if (interaction.commandName === 'who') return handleWho(interaction);
 
   const item = ITEMS[interaction.commandName];
   if (!item) return undefined;
