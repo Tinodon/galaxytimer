@@ -19,6 +19,7 @@ import * as store from '../src/store.js';
 import { initStores } from '../src/boot.js';
 import * as sql from '../src/sql.js';
 import * as api from '../src/glapi.js';
+import * as pins from '../src/pins.js';
 
 const TEST_SCHEMA = 'essai';
 import { loadEmojis } from '../src/emoji.js';
@@ -134,7 +135,9 @@ async function checkMap() {
   const find = keep(await run('find', { player: 'Myra' }));
   report('/find sort les coordonnees relevees',
     /336,\s*7/.test(find) && /colonies mapped/i.test(find), find.slice(0, 90));
-  report('/find affiche le QG quand il est connu', /338,\s*10`\s+HQ 5/.test(find), find);
+  report('/find affiche le QG quand il est connu', find.includes('338,10 · HQ 5'), find);
+  // Noe ne veut pas de bloc de code gris : du texte simple.
+  report('/find ecrit en texte simple, sans bloc de code', !find.includes('`'), find);
 
   // Un pseudo en S : avec les morceaux Upstash, ces joueurs etaient ranges
   // sous "b" et cherches sous "s" — 18 % d'introuvables. La base cherche par id.
@@ -162,11 +165,29 @@ async function checkMap() {
   report('/who refuse plusieurs coordonnees', /one coordinate/i.test(String(whoDeux)),
     String(whoDeux).slice(0, 70));
 
+  // La saisie en une traite : le pseudo, puis les coordonnees lues depuis la fin.
+  const lu = (text) => {
+    const r = pins.parsePinInput(text);
+    return r.error ? 'erreur' : `${r.name}|${r.coords.map((c) => `${c.x},${c.y}`).join(' ')}`;
+  };
+  for (const [saisie, attendu] of [
+    ['Myra 351,10', 'Myra|351,10'],
+    ['krzysztof32171 351,10 352,11', 'krzysztof32171|351,10 352,11'],
+    ['Myra 351 10', 'Myra|351,10'],
+    ['Myra 351, 10', 'Myra|351,10'],
+    ['2003 351,10', '2003|351,10'],
+    ['Myra', 'erreur'],
+  ]) {
+    report(`/pin lit "${saisie}"`, lu(saisie) === attendu, `${lu(saisie)} au lieu de ${attendu}`);
+  }
+
   // /pin ecrit dans la base, et la carte est globale.
-  const pin = keep(await run('pin', { player: 'Myra', coords: '512,340 601,299' }));
+  // Un seul champ, rempli d'une traite : "/pin Myra 512,340 601,299".
+  const pin = keep(await run('pin', { player: 'Myra 512,340 601,299' }));
   report('/pin accepte plusieurs paires', /\*\*2\*\* new/.test(pin), pin.slice(0, 80));
 
-  const repin = keep(await run('pin', { player: 'Myra', coords: '336,7' }));
+  // Separateurs tolerés : "336, 7" doit valoir "336,7".
+  const repin = keep(await run('pin', { player: 'Myra 336, 7' }));
   report('/pin sur une colonie relevee la confirme', /1 already known/.test(repin),
     repin.slice(0, 80));
   const { rows: origine } = await sql.query(
@@ -186,9 +207,9 @@ async function checkMap() {
 
   const apresPin = keep(await run('find', { player: 'Myra' }));
   report('/find ressort les pins, marques comme tels',
-    /512,\s*340`\s+pinned/.test(apresPin), apresPin.slice(0, 200));
+    apresPin.includes('512,340 📌') && !apresPin.includes('`'), apresPin.slice(0, 200));
 
-  const pinNul = await run('pin', { player: 'Myra', coords: 'nawak' });
+  const pinNul = await run('pin', { player: 'Myra nawak' });
   report('/pin refuse des coordonnees illisibles',
     /No coordinates found/i.test(String(pinNul)), String(pinNul).slice(0, 70));
 

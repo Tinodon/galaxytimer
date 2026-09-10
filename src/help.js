@@ -58,8 +58,8 @@ export function helpText() {
     '**Coordinates** — where players actually are, which the game API never gives',
     '`/find <player>` — every colony coordinate known for them.',
     '`/map <alliance>` — the same for a whole alliance, member by member.',
-    '`/pin <player> <coords>` — add coordinates you saw yourself, e.g.',
-    '`/pin player:John coords:512,340 601,299`. Yours win over the scanned map.',
+    '`/pin <player> <coords>` — add coordinates you saw yourself, in one go:',
+    '`/pin John 512,340 601,299`. Pinned colonies show 📌 and win over the scanned map.',
     '`/who <coords>` — who has a colony there, e.g. `/who coords:359,11`.',
     'One map for everyone: a pin made on any server shows up everywhere.',
   );

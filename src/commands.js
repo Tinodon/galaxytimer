@@ -96,12 +96,12 @@ export const definitions = [
 
   new SlashCommandBuilder()
     .setName('pin')
-    .setDescription('Record colony coordinates you saw in game')
+    .setDescription('Record colonies you saw in game: /pin Myra 351,10')
+    // UN seul champ, rempli d'une traite : "Myra 351,10 352,11". Deux champs
+    // obligeaient a cliquer de l'un a l'autre, ce que Noe trouvait lent.
     .addStringOption((o) =>
-      o.setName('player').setDescription('Whose colonies').setRequired(true))
-    .addStringOption((o) =>
-      o.setName('coords')
-        .setDescription('One or more pairs, e.g. 512,340 601,299')
+      o.setName('player')
+        .setDescription('Player, then coordinates — e.g. Myra 351,10 352,11')
         .setRequired(true))
     .toJSON(),
 
@@ -314,11 +314,18 @@ const extras = (...parts) => parts.filter((p) => p !== null && p !== undefined &
 
 const hqLabel = (hq) => (Number.isFinite(hq) ? `HQ ${hq}` : '');
 
-/** "`  336,   7`  HQ 5 · pinned" — rien apres les coordonnees si rien n'est connu. */
+// Colonie saisie a la main avec /pin. Un emoji plutot qu'un mot : demande de
+// Noe, ca se repere d'un coup d'oeil dans une liste.
+const PIN_MARK = '📌';
+
+/**
+ * "336,7 · HQ 5 📌" — en texte simple, sans bloc de code (Noe ne veut pas
+ * de "container" gris). Rien apres les coordonnees si rien n'est connu.
+ */
 function spotLine(spot) {
-  const coords = `\`${String(spot.x).padStart(4)},${String(spot.y).padStart(4)}\``;
-  const more = extras(hqLabel(spot.hq), spot.pinned ? 'pinned' : '');
-  return more ? `${coords}  ${more}` : coords;
+  const coords = `${spot.x},${spot.y}`;
+  const hq = hqLabel(spot.hq);
+  return [hq ? `${coords} · ${hq}` : coords, spot.pinned ? PIN_MARK : ''].filter(Boolean).join(' ');
 }
 
 /** Repond proprement quand la base de la carte n'est pas configuree. */
@@ -330,8 +337,7 @@ async function requireMap(interaction) {
 
 async function handlePin(interaction) {
   await interaction.deferReply();
-  const name = interaction.options.getString('player');
-  const { coords, error } = pins.parseCoords(interaction.options.getString('coords'));
+  const { name, coords, error } = pins.parsePinInput(interaction.options.getString('player'));
   if (error) {
     await interaction.editReply(error);
     return;
@@ -435,9 +441,9 @@ async function handleMap(interaction) {
     if (!spots.length) continue;
 
     mapped += spots.length;
-    const list = spots
-      .map((s) => `\`${s.x},${s.y}\`${Number.isFinite(s.hq) ? ` HQ ${s.hq}` : ''}`)
-      .join(' ');
+    // Meme format que /find, sans bloc de code ; " | " separe les colonies,
+    // la virgule appartenant deja aux coordonnees.
+    const list = spots.map(spotLine).join(' | ');
     rows.push(`**${member.Name}** (lvl ${member.Level}) — ${list}`);
   }
 
@@ -494,9 +500,9 @@ async function handleWho(interaction) {
         f.alliance,
         Number.isFinite(f.level) ? `lvl ${f.level}` : '',
         hqLabel(f.hq),
-        f.pinned ? 'pinned' : '',
       );
-      return more ? `**${f.name}** · ${more}` : `**${f.name}**`;
+      const line = more ? `**${f.name}** · ${more}` : `**${f.name}**`;
+      return f.pinned ? `${line} ${PIN_MARK}` : line;
     }),
   ];
   await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
