@@ -20,6 +20,7 @@ import { initStores } from '../src/boot.js';
 import * as sql from '../src/sql.js';
 import * as api from '../src/glapi.js';
 import * as pins from '../src/pins.js';
+import { interactionFromMessage, messageContentEnabled, optionsFor, parseMessage } from '../src/textcommands.js';
 
 const TEST_SCHEMA = 'essai';
 import { loadEmojis, NAMED_EMOJIS } from '../src/emoji.js';
@@ -339,6 +340,103 @@ async function checkMap() {
     `${before} -> ${await realCount()} colonies`);
 }
 
+// --- Commandes texte : "!find myra", sans aucun champ ---
+function fakeMessage(content) {
+  const sent = [];
+  const channel = {
+    async send(payload) {
+      const message = { content: payload.content, payload, async edit(next) { message.content = next.content; return message; } };
+      sent.push(message);
+      return message;
+    },
+    async sendTyping() {},
+  };
+  return {
+    sent,
+    message: {
+      content,
+      author: { id: USER, bot: false, username: 'Tinodon', displayName: 'Tinodon' },
+      member: { displayName: 'Tinodon' },
+      guildId: GUILD,
+      channelId: CHANNEL,
+      channel,
+    },
+  };
+}
+
+async function runText(content) {
+  const { sent, message } = fakeMessage(content);
+  const interaction = interactionFromMessage(message);
+  if (!interaction) return null;
+  await handleCommand(interaction);
+  return sent;
+}
+
+async function checkTextCommands() {
+  console.log('\nCOMMANDES TEXTE (!find myra)');
+
+  // Le bot ne demande l'intent que s'il est active : sinon Discord refuse sa
+  // connexion et il tomberait entierement.
+  report("l'intent absent n'est pas demande (drapeaux actuels de l'application)",
+    messageContentEnabled(10485760) === false);
+  report("l'intent active par l'interrupteur du portail est reconnu",
+    messageContentEnabled(10485760 | (1 << 19)) === true);
+  report("l'intent d'un bot verifie est reconnu", messageContentEnabled(1 << 18) === true);
+
+  const lecture = (text) => {
+    const r = parseMessage(text);
+    return r ? `${r.name}|${r.rest}` : 'ignore';
+  };
+  for (const [texte, attendu] of [
+    ['!find myra', 'find|myra'],
+    ['!FIND Myra', 'find|Myra'],
+    ['!pin myra 336,7 5', 'pin|myra 336,7 5'],
+    ['!list', 'list|'],
+    ['find myra', 'ignore'],
+    ['!ban someone', 'ignore'],
+    ['!', 'ignore'],
+  ]) {
+    report(`"${texte}" est lu comme ${attendu}`, lecture(texte) === attendu, lecture(texte));
+  }
+
+  const opts = (name, rest) => JSON.stringify(optionsFor(name, rest));
+  for (const [name, rest, attendu] of [
+    ['find', 'myra', '{"player":"myra"}'],
+    ['pin', 'myra 336,7 5', '{"player":"myra 336,7 5"}'],
+    ['upgrade', '2h Barracks repeat', '{"repeat":true,"duration":"2h","name":"Barracks"}'],
+    ['helmet', 'repeat', '{"repeat":true}'],
+    ['wars', 'John Doe', '{"player":"John Doe"}'],
+    ['list', '', '{}'],
+  ]) {
+    report(`!${name} ${rest} -> ${attendu}`, opts(name, rest) === attendu, opts(name, rest));
+  }
+
+  // Bout en bout : le message part dans le salon, sans champ ni fenetre.
+  const aide = await runText('!glhelp');
+  report('!glhelp repond dans le salon', aide?.length === 1 && /GalaxyTimer/.test(aide[0].content),
+    JSON.stringify(aide?.map((m) => m.content.slice(0, 40))));
+
+  const casque = await runText('!helmet repeat');
+  const timer = store.forUser(USER, GUILD).find((t) => t.itemId === 'helmet');
+  report('!helmet repeat lance un timer recurrent', Boolean(casque?.length) && timer?.repeat === true,
+    JSON.stringify(timer));
+  const stop = await runText('!stop helmet');
+  report('!stop helmet arrete le bon timer', /stopped/i.test(stop?.[0]?.content ?? '')
+    && !store.forUser(USER, GUILD).some((t) => t.itemId === 'helmet'), stop?.[0]?.content);
+
+  if (sql.configured()) {
+    const find = await runText('!find Myra');
+    report('!find Myra repond un seul message, edite apres la recherche',
+      find?.length === 1 && /colonies mapped/.test(find[0].content), find?.[0]?.content?.slice(0, 80));
+    report('les reponses texte ne pingent personne',
+      JSON.stringify(find?.[0]?.payload?.allowedMentions) === '{"parse":[]}',
+      JSON.stringify(find?.[0]?.payload?.allowedMentions));
+  }
+
+  report('un message d\'un autre bot est ignore',
+    interactionFromMessage({ ...fakeMessage('!find myra').message, author: { id: 'x', bot: true } }) === null);
+}
+
 async function main() {
   console.log('Verification de toutes les commandes\n');
 
@@ -398,6 +496,11 @@ async function main() {
   const mauvaise = await run('upgrade', { duration: 'pas-une-duree' });
   report('/upgrade refuse une duree invalide',
     /Could not read duration/i.test(String(mauvaise)), String(mauvaise).slice(0, 60));
+
+  await run('toolcase', { repeat: true });
+  report('/toolcase repeat:True lance un timer recurrent',
+    store.forUser(USER, GUILD).find((t) => t.itemId === 'toolcase')?.repeat === true,
+    'l option repeat est ignoree');
 
   const liste = await run('timers');
   report('/timers liste les timers en cours',
@@ -459,6 +562,8 @@ async function main() {
   // --- La carte, dans la base SQL (schema de test) ---
   console.log(`\nCARTE (base SQL, schema "${TEST_SCHEMA}")`);
   if (sql.configured()) await checkMap();
+
+  await checkTextCommands();
 
   // --- L'aide ---
   console.log('\nAIDE');

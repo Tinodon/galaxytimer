@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Events, ActivityType } from 'discord.js';
+import { Client, GatewayIntentBits, Events, ActivityType, REST } from 'discord.js';
 import * as lock from './lock.js';
 import * as store from './store.js';
 import { ITEM_LIST } from './items.js';
@@ -7,6 +7,7 @@ import * as scheduler from './scheduler.js';
 import * as intel from './intel.js';
 import { initStores } from './boot.js';
 import { handleAutocomplete, handleCommand } from './commands.js';
+import { interactionFromMessage, messageContentEnabled, PREFIX } from './textcommands.js';
 import { loadEmojis } from './emoji.js';
 import { loadLibrary, librarySize } from './artwork.js';
 import { startHealthServer } from './health.js';
@@ -25,9 +26,9 @@ if (!token) {
 // Refuse de demarrer si un autre bot tourne deja : voir src/lock.js.
 lock.acquire();
 
-// Aucun intent privilegie : le bot ne lit pas les messages, il repond a des
-// interactions. Rien a activer dans le portail developpeur.
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// Le client est cree une fois connu ce que l'application a le droit de lire
+// (voir main plus bas).
+let client = null;
 
 // Etat publie par /health. Renseigne des que le bot est pret ; avant ca, le
 // serveur repond quand meme "starting", ce qui suffit a l'hebergeur.
@@ -49,7 +50,7 @@ startHealthServer({
   }),
 });
 
-client.once(Events.ClientReady, async (c) => {
+async function onReady(c) {
   await initStores();
   await loadEmojis(c);
   for (const folder of new Set(ITEM_LIST.map((i) => i.artwork).filter(Boolean))) {
@@ -63,20 +64,15 @@ client.once(Events.ClientReady, async (c) => {
   c.user.setActivity('Galaxy Life', { type: ActivityType.Watching });
   const active = store.all().length;
   console.log(`[bot] logged in as ${c.user.tag} — ${active} timer(s) restored`);
-  scheduler.start(client);
+  scheduler.start(c);
   ready = { tag: c.user.tag, guilds: c.guilds.cache.size };
   startIntelPolling();
+}
 
-
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    if (interaction.isChatInputCommand()) return await handleCommand(interaction);
-    if (interaction.isAutocomplete()) return await handleAutocomplete(interaction);
-  } catch (err) {
-    console.error('[bot] error while handling an interaction:', err);
-    if (!interaction.isRepliable() || interaction.replied) return;
+/** Repond quelque chose quand une commande plante, plutot que rien. */
+async function answerError(interaction, err) {
+  console.error('[bot] error while handling a command:', err);
+  if (!interaction.isRepliable() || interaction.replied) return;
     // Une commande DIFFEREE (deferReply) affiche "en train de reflechir"
     // jusqu'a ce qu'on edite sa reponse. Sans cette branche, toute erreur apres
     // le deferReply laissait le bot reflechir indefiniment — /pin, /find, /map,
@@ -87,11 +83,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .catch(() => {});
       return;
     }
-    await interaction
-      .reply({ content: 'Internal error, try again.', flags: 64 })
-      .catch(() => {});
+  await interaction
+    .reply({ content: 'Internal error, try again.', flags: 64 })
+    .catch(() => {});
+}
+
+async function onInteraction(interaction) {
+  try {
+    if (interaction.isChatInputCommand()) return await handleCommand(interaction);
+    if (interaction.isAutocomplete()) return await handleAutocomplete(interaction);
+  } catch (err) {
+    await answerError(interaction, err);
   }
-});
+  return undefined;
+}
+
+/** "!find myra" : meme gestionnaire qu'une commande slash (voir textcommands.js). */
+async function onMessage(message) {
+  const interaction = interactionFromMessage(message);
+  if (!interaction) return;
+  try {
+    await handleCommand(interaction);
+  } catch (err) {
+    await answerError(interaction, err);
+  }
+}
+
+/**
+ * L'intent "Message Content" est-il active dans le portail developpeur ?
+ *
+ * Il faut le savoir AVANT de se connecter : un bot qui demande cet intent sans
+ * l'avoir fait activer est refuse par Discord, et tomberait entierement. On
+ * lit donc les drapeaux de l'application ; en cas de doute, on s'en passe.
+ */
+async function messageContentAllowed() {
+  try {
+    const app = await new REST().setToken(token).get('/applications/@me');
+    return messageContentEnabled(app.flags);
+  } catch (err) {
+    console.warn('[bot] could not read application flags, text commands disabled:', err.message);
+    return false;
+  }
+}
+
+function createClient(withMessages) {
+  const intents = [GatewayIntentBits.Guilds];
+  if (withMessages) intents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+  const c = new Client({ intents });
+  c.once(Events.ClientReady, onReady);
+  c.on(Events.InteractionCreate, onInteraction);
+  if (withMessages) c.on(Events.MessageCreate, onMessage);
+  return c;
+}
 
 // Filet de securite : couvre les sorties qui ne passent pas par un signal.
 process.on('exit', () => lock.release());
@@ -120,7 +163,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     scheduler.stop();
     if (intelTimer) clearInterval(intelTimer);
     lock.release();
-    client.destroy();
+    client?.destroy();
     process.exit(0);
   });
 }
@@ -128,7 +171,16 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 // Une connexion ratee ne doit pas tuer le process : on garde le serveur HTTP
 // debout pour que l'hebergeur affiche le service et que /health dise pourquoi,
 // au lieu d'une boucle de redemarrage muette.
-client.login(token).catch((err) => {
+async function main() {
+  const withMessages = await messageContentAllowed();
+  console.log(withMessages
+    ? `[bot] text commands on: "${PREFIX}find myra" works alongside /find`
+    : '[bot] text commands off: enable "Message Content Intent" in the developer portal (Bot tab) to use them');
+  client = createClient(withMessages);
+  await client.login(token);
+}
+
+main().catch((err) => {
   loginError = err.message;
   console.error(`[bot] Discord login failed: ${err.message}`);
   console.error('[bot] check DISCORD_TOKEN. The HTTP server stays up so /health can report it.');

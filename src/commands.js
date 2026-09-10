@@ -255,8 +255,11 @@ async function startTimer(interaction, item) {
     item,
     name,
     duration,
-    // Relancer un timer conserve son reglage repeat.
-    repeat: existing?.repeat ?? false,
+    // L'option repeat choisie l'emporte ; sans elle, relancer un timer conserve
+    // son reglage. L'option existait sur chaque commande mais n'etait jamais
+    // lue : depuis la suppression des boutons, aucun timer ne pouvait plus
+    // devenir recurrent.
+    repeat: interaction.options.getBoolean('repeat') ?? existing?.repeat ?? false,
   });
 
   await replyAndTrack(interaction, record, item, username);

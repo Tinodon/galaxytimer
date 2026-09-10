@@ -75,6 +75,23 @@ pour toute future commande -- si un bouton suffit, pas de commande.
 Le panneau `/timers` est plafonne a 5 rangees (limite Discord de composants par
 message). Au-dela de 5 items simultanes, il faudra passer a un menu deroulant.
 
+## Commandes texte (`!find myra`)
+
+Une commande slash qui recoit du texte a forcement un champ, et Discord
+affiche son nom : Noe trouvait ca lent. Chaque commande existe donc aussi en
+texte libre, prefixe `!` (`src/textcommands.js`). Regles :
+
+- **Aucun gestionnaire duplique** : le message est habille en fausse
+  interaction et passe par `handleCommand`. Une commande ajoutee en slash
+  marche en texte sans rien faire de plus.
+- Lire les messages exige l'intent privilegie **Message Content**. Un bot qui
+  le demande sans l'avoir fait activer dans le portail est REFUSE par Discord
+  et tombe entierement. `index.js` lit donc les drapeaux de l'application avant
+  de se connecter, et ne demande l'intent que s'il est active. Ne jamais
+  l'ajouter en dur aux intents.
+- Les commandes slash restent : elles seules remplissent la section
+  "Commands" du profil du bot.
+
 ## Multi-serveur
 
 Le bot est concu multi-serveur : cle `guildId:userId:itemId`, timers isoles par

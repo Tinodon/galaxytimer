@@ -55,6 +55,8 @@ export function helpText() {
     '`/pin <player> <coords> [HQ]` — add a planet: `/pin John 512,340 5`.',
     '`/edit <player> <line> ...` — fix the 3rd line of /find: `/edit John 3 delete`,',
     '`/edit John 3 6` (HQ), `/edit John 3 512,341`, `/edit John 3 512,341 6`.',
+    '',
+    'Every command also works typed as text, no fields: `!find John`, `!pin John 512,340 5`.',
   );
 
   return lines.join('\n');
