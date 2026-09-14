@@ -44,10 +44,10 @@ DATA_DIR = BASE_DIR / "data"
 STATE_FILE = DATA_DIR / "crawl_state.json"
 LOG_FILE = DATA_DIR / "releve.txt"
 MAPS_DIR = DATA_DIR / "cartes"
-POPUPS_DIR = DATA_DIR / "popups"
+POPUPS_DIR = DATA_DIR / "a_traiter"
 
-UNIVERSE_MAX = 1408
-
+UNIVERSE_MAX = 1150
+    # 1408
 stop_requested = False
 
 

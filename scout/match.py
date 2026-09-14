@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -49,6 +50,11 @@ MIN_MARGIN = 0.04
 MIN_READ_LENGTH = 4          # en dessous, il n'y a pas de quoi identifier
 MIN_LENGTH_RATIO = 0.75      # une correction ne doit pas refaire le mot
 MAX_JUNK_RATIO = 0.25        # trop de signes = du bruit, pas un pseudo
+
+# Ressemblance minimale entre les lettres de l'image et celles du pseudo retenu,
+# quand la verification lettre a lettre est utilisee.
+MIN_LETTERS = 0.80
+MIN_LETTERS_CORRECTED = 0.90
 
 
 def reading_is_usable(reading):
@@ -93,6 +99,22 @@ def level_growth_fits(on_tile, now):
     return now - on_tile <= max(15, on_tile * 0.25)
 
 
+def _levenshtein(a, b):
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1,
+                               previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1]
+
+
+def literal(name):
+    """Minuscules, lettres et chiffres seulement, sans rien confondre."""
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
 class Roster:
     """Le dictionnaire des joueurs, indexe pour la recherche approchee."""
 
@@ -116,6 +138,15 @@ class Roster:
         self.names = names
         self.canonical = [canonical(n) for n in names]
         self.exact = {}
+        # Index LITTERAL : minuscules, lettres et chiffres seulement, SANS
+        # applatir les lettres qui se ressemblent. `canonical` confond U, L et I
+        # (et S avec B) : "ULSUS" et "Lisus" y deviennent tous deux "iibib", et
+        # une lecture parfaite designait le mauvais joueur. Une lecture qui colle
+        # lettre pour lettre a un vrai pseudo passe desormais avant tout le reste.
+        self.literal = defaultdict(list)
+        # Tous les pseudos sous forme litterale, pour chercher une lecture dont
+        # une lettre a ete coupee ou mangee par le decor.
+        self.literal_names = []
         self.index = defaultdict(list)
 
         for position, flat in enumerate(self.canonical):
@@ -123,6 +154,9 @@ class Roster:
             # identique (Tinodon / T1n0don) ne peuvent de toute facon pas etre
             # departages par une lecture d'image.
             self.exact.setdefault(flat, position)
+            plain = literal(names[position])
+            self.literal[plain].append(position)
+            self.literal_names.append(plain)
             for gram in self._bigrams(flat):
                 self.index[gram].append(position)
 
@@ -167,6 +201,180 @@ class Roster:
         keep.sort(reverse=True)
         return [position for _, position in keep[:max_candidates]]
 
+    def _pick(self, positions, level):
+        """Un seul joueur parmi des pseudos litteralement identiques a la lecture.
+
+        Le niveau DEPARTAGE, il n'elimine jamais : lu par OCR, il est faux une
+        fois sur deux ("96" lu "36"), et s'en servir pour refuser tuait des
+        lectures parfaites.
+        """
+        positions = list(dict.fromkeys(positions))
+        if len(positions) == 1:
+            return positions[0]
+        if level is not None:
+            fitting = [p for p in positions if self._level_fits(self.names[p], level)
+                       and self.levels.get(self.names[p]) is not None]
+            if len(fitting) == 1:
+                return fitting[0]
+        return None
+
+    def _literal_match(self, reading, level):
+        """Pseudo reel ecrit EXACTEMENT comme la lecture, ou presque.
+
+        Dans l'ordre, du plus sur au moins sur :
+          1. la lecture telle quelle ;
+          2. sans un caractere parasite au debut ou a la fin ("_HIRIKI",
+             "KALOLOXD_", "GORANLl") ;
+          3. en rendant au 0 les O d'une suite de chiffres ("HARVEYOOO") et au
+             W les UV / VV d'un W eclate ("KLEUVIN") ;
+          4. une lecture dont la premiere ou la derniere lettre a ete coupee par
+             le bord de la vignette : un seul pseudo reel la contient
+             ("EANDREPONCET" dans leandreponcet).
+        """
+        plain = literal(reading)
+        if len(plain) < 3:
+            return None
+
+        forms = [plain]
+        for form in (plain[1:], plain[:-1], plain[1:-1]):
+            if len(form) >= 3:
+                forms.append(form)
+        for form in list(forms):
+            fixed = re.sub(r"(?<=[0-9o])o|o(?=[0-9o]*[0-9])", "0", form)
+            fixed = fixed.replace("uv", "w").replace("vv", "w")
+            if fixed != form:
+                forms.append(fixed)
+
+        # Chiffres de fin lus comme des lettres : "WILLYSOSAIS" pour willysosa15.
+        # Seulement sur les trois derniers caracteres, ou le jeu met les chiffres.
+        digit_like = {"i": "1", "l": "1", "s": "5", "o": "0", "z": "2", "b": "8", "g": "9"}
+        for form in list(forms):
+            head, tail = form[:-3], form[-3:]
+            swapped = "".join(digit_like.get(c, c) for c in tail)
+            if swapped != tail:
+                forms.append(head + swapped)
+                # un seul chiffre change a la fois aussi ("sa15" : le a reste)
+                for i, c in enumerate(tail):
+                    if c in digit_like:
+                        forms.append(head + tail[:i] + digit_like[c] + tail[i + 1:])
+
+        for index, form in enumerate(forms):
+            positions = self.literal.get(form)
+            if positions:
+                chosen = self._pick(positions, level)
+                if chosen is not None:
+                    return {"name": self.names[chosen],
+                            "score": 1.0 if index == 0 else 0.98,
+                            "reason": "litteral" if index == 0 else "litteral corrige"}
+
+        # Le pseudo de la vignette VOISINE deborde dans la lecture : "HARVEYOOOLE"
+        # = harvey000 + "LE" de LEANDREPONCET. On retire jusqu'a 3 caracteres
+        # a la fin, et on n'accepte qu'un pseudo assez long pour etre sur.
+        for form in forms:
+            for cut in (1, 2, 3):
+                shorter = form[:-cut]
+                # Refus si un AUTRE vrai pseudo prolonge ce debut : "HYSTERIANS"
+                # coupe en hysteria alors que Hysteria19 existe — les lettres
+                # retirees etaient peut-etre ses chiffres, pas le voisin.
+                longer = [n for n in self.literal_names
+                          if n != shorter and n.startswith(shorter) and len(n) <= len(form) + 1]
+                if len(shorter) >= 6 and shorter in self.literal and not longer:
+                    chosen = self._pick(self.literal[shorter], level)
+                    if chosen is not None:
+                        return {"name": self.names[chosen], "score": 0.93,
+                                "reason": "litteral, debordement du voisin"}
+
+        # Lettre coupee au bord : un pseudo reel un peu plus long qui contient
+        # la lecture. Seulement pour une lecture assez longue pour etre
+        # discriminante, et seulement si elle ne designe qu'UN joueur.
+        if len(plain) >= 7:
+            for form in forms:
+                found = [i for i, name in enumerate(self.literal_names)
+                         if form in name and len(name) <= len(form) + 2]
+                chosen = self._pick(found, level) if found else None
+                if chosen is not None:
+                    return {"name": self.names[chosen], "score": 0.95,
+                            "reason": "litteral, lettre coupee"}
+        return None
+
+    def match_slot(self, reads, level=None, margin=0.05, verify=None, finalists=3):
+        """Meilleur pseudo pour UNE vignette, a partir de TOUTES ses lectures.
+
+        Chaque seuil donne une lecture. Un seuil qui mange une lettre peut
+        tomber, par hasard, sur un autre vrai joueur : "MOONLIGHTR" lu
+        "MOONLIGHT" designait MoonLight, "KLEWIN" lu "KLEIN" designait Klein.
+        Prendre la meilleure lecture isolee retenait ces faux.
+
+        On rassemble donc les candidats proposes par chaque lecture, puis on
+        garde celui qui ressemble le plus a L'ENSEMBLE des lectures. Si deux
+        candidats restent trop proches, on ne tranche pas : mieux vaut une
+        vignette a verifier a la main qu'un pseudo faux en base.
+        """
+        proposals = {}
+        for read in reads:
+            m = self.match(read, level=level)
+            if m["name"]:
+                proposals.setdefault(m["name"], m)
+        if not proposals:
+            return {"name": None, "score": 0.0, "reason": "aucune lecture ne donne un joueur",
+                    "consensus": []}
+
+        plains = [literal(r) for r in reads if literal(r)]
+
+
+        def similarity(a, b):
+            return 1 - _levenshtein(a, b) / max(len(a), len(b), 1)
+
+        ranked = sorted(
+            ((sum(similarity(p, literal(name)) for p in plains) / len(plains), name)
+             for name in proposals),
+            reverse=True,
+        )
+
+        # Verification LETTRE A LETTRE sur l'image, pour les finalistes
+        # seulement (elle coute environ une seconde par candidat). Les lectures
+        # ne voient que des caracteres ; les gabarits voient leur forme et leur
+        # largeur, et un W prend deux fois la place d'un I : c'est ce qui separe
+        # klewin de Klein quand un seuil a mange le W.
+        self.last_letters = {}
+        # Doute mesure AVANT de meler le score des lettres.
+        # Toute CORRECTION est aussi un doute : une lettre retiree ou un O
+        # change en 0 sur une lecture deja trop courte donnait Pedr0 pour
+        # PedroP, Koloss pour kolos69. Seule une lecture exacte en est dispensee.
+        in_doubt = (len(proposals) > 1 or ranked[0][0] < 0.95
+                    or proposals[ranked[0][1]].get("reason") not in ("litteral", "exact"))
+        if verify is not None:
+            rescored = []
+            for score, name in ranked[:finalists]:
+                letters = verify(name)
+                self.last_letters[name] = round(letters, 3)
+                rescored.append(((score + letters) / 2, name))
+            ranked = sorted(rescored, reverse=True) + ranked[finalists:]
+        best_score, best_name = ranked[0]
+        consensus = [(name, round(score, 3)) for score, name in ranked]
+        # Les lettres ne tranchent qu'en cas de DOUTE : plusieurs joueurs
+        # proposes, ou des lectures qui ne sont pas d'accord entre elles. Une
+        # lecture qui tombe pile sur un vrai pseudo a chaque seuil n'a pas a etre
+        # contredite par des gabarits qui connaissent mal certaines lettres
+        # (GoranL et xqxqx, pourtant justes, auraient ete rejetes).
+        # Une lecture CORRIGEE (lettre retiree, O change en 0...) doit coller
+        # nettement aux lettres de l'image : sur les captures verifiees, les
+        # corrections fausses (Pedr0, Koloss, Cycu123, plato) etaient toutes
+        # entre 0,81 et 0,88, les justes au-dessus.
+        corrected = proposals[best_name].get("reason") not in ("litteral", "exact")
+        needed = MIN_LETTERS_CORRECTED if corrected else MIN_LETTERS
+        if verify is not None and in_doubt and self.last_letters.get(best_name, 1.0) < needed:
+            return {"name": None, "score": round(best_score, 3), "consensus": consensus,
+                    "letters": self.last_letters,
+                    "reason": "les lettres de l'image ne collent pas a {}".format(best_name)}
+        if len(ranked) > 1 and best_score - ranked[1][0] < margin:
+            return {"name": None, "score": round(best_score, 3), "consensus": consensus,
+                    "reason": "hesite entre {} et {}".format(best_name, ranked[1][1])}
+        chosen = dict(proposals[best_name])
+        chosen["consensus"] = consensus
+        chosen["letters"] = self.last_letters
+        return chosen
+
     def _level_fits(self, name, level):
         return _level_fits(name, level, self.levels)
 
@@ -197,6 +405,10 @@ class Roster:
         # Elles servent a TROUVER des candidats ; le score reste mesure sur la
         # lecture d'origine, donc rien n'est offert gratuitement.
         forms = merge_variants(flat)
+
+        hit = self._literal_match(reading, level)
+        if hit:
+            return hit
 
         if flat in self.exact:
             position = self.exact[flat]
