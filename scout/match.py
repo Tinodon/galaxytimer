@@ -48,6 +48,7 @@ MIN_MARGIN = 0.04
 #
 # Ces trois garde-fous portent sur la lecture elle-meme, pas sur sa distance.
 MIN_READ_LENGTH = 4          # en dessous, il n'y a pas de quoi identifier
+SHORT_NAME_LENGTH = 3        # accepte seulement exact ET confirme par les lettres
 MIN_LENGTH_RATIO = 0.75      # une correction ne doit pas refaire le mot
 MAX_JUNK_RATIO = 0.25        # trop de signes = du bruit, pas un pseudo
 
@@ -342,6 +343,7 @@ class Roster:
         # change en 0 sur une lecture deja trop courte donnait Pedr0 pour
         # PedroP, Koloss pour kolos69. Seule une lecture exacte en est dispensee.
         in_doubt = (len(proposals) > 1 or ranked[0][0] < 0.95
+                    or len(literal(ranked[0][1])) <= SHORT_NAME_LENGTH
                     or proposals[ranked[0][1]].get("reason") not in ("litteral", "exact"))
         if verify is not None:
             rescored = []
@@ -399,6 +401,15 @@ class Roster:
         # dire que designer le premier voisin venu.
         unusable = reading_is_usable(reading)
         if unusable:
+            # Un pseudo de 3 lettres (BAS) reste possible, mais UNIQUEMENT s'il
+            # existe tel quel : aucune correction sur une lecture aussi courte.
+            # match_slot exige en plus que les lettres de l'image le confirment.
+            plain = literal(reading)
+            if (len(plain) == SHORT_NAME_LENGTH and unusable == "lecture trop courte"
+                    and plain in self.literal):
+                chosen = self._pick(self.literal[plain], level)
+                if chosen is not None:
+                    return {"name": self.names[chosen], "score": 1.0, "reason": "litteral court"}
             return {"name": None, "score": 0.0, "reason": unusable}
 
         # Les formes obtenues en recollant un glyphe eclate ("aayra" -> "myra").
