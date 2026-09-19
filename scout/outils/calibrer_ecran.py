@@ -26,8 +26,8 @@ import keyboard
 import mss
 from PIL import Image
 
-OUT_DIR = Path(__file__).resolve().parent / "captures"
-OUT_DIR.mkdir(exist_ok=True)
+OUT_DIR = Path(__file__).resolve().parent.parent / "data" / "scan" / "ecrans_de_reference"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 GAME_TITLE = "galaxy life"
 

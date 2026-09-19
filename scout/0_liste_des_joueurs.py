@@ -29,12 +29,15 @@ from pathlib import Path
 
 import requests
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-ROSTER_FILE = DATA_DIR / "roster.json"
-STATE_FILE = DATA_DIR / "roster_state.json"
-LEVELS_FILE = DATA_DIR / "roster_niveaux.json"
-PLAYERS_FILE = DATA_DIR / "roster_joueurs.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent / "moteur"))
+
+import chemins  # noqa: E402
+
+DATA_DIR = chemins.JOUEURS
+ROSTER_FILE = chemins.ROSTER
+STATE_FILE = chemins.ROSTER_ETAT
+LEVELS_FILE = chemins.NIVEAUX
+PLAYERS_FILE = chemins.FICHES
 
 ALPHABET = string.ascii_lowercase + string.digits
 

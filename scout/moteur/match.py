@@ -27,9 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from names import canonical, merge_variants, weighted_distance  # noqa: E402
 
-BASE_DIR = Path(__file__).resolve().parent
-ROSTER_FILE = BASE_DIR / "data" / "roster.json"
-LEVELS_FILE = BASE_DIR / "data" / "roster_niveaux.json"
+import chemins  # noqa: E402
+
+ROSTER_FILE = chemins.ROSTER
+LEVELS_FILE = chemins.NIVEAUX
 
 # Au-dessous, on refuse de trancher. Mieux vaut signaler un pseudo incertain que
 # d'en designer un faux : une coordonnee attribuee au mauvais joueur envoie
@@ -491,7 +492,7 @@ def main():
     print("{} pseudo(s) au dictionnaire\n".format(len(roster.names)))
 
     if args.check:
-        truth = json.loads((BASE_DIR / "truth.json").read_text(encoding="utf-8"))
+        truth = json.loads((chemins.VERITE).read_text(encoding="utf-8"))
         expected = [n for key, names in truth.items()
                     if not key.startswith("_") for n in names]
         found = sum(1 for n in expected if canonical(n) in roster.exact)

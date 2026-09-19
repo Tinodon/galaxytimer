@@ -6,9 +6,7 @@ data/
 
 # Captures d'ecran : volumineuses, propres a une machine, et elles montrent
 # l'ecran de jeu (ressources, pseudos d'autres joueurs). Le depot est public :
-# rien de tout ca n'a a y figurer. scout/selftest.py se contente de dire que la
-# capture de reference manque.
-scout/captures/
-scout/debug/
-scout/crawl_state.json
+# rien de tout ca n'a a y figurer. Tout ce que le scout produit vit dans
+# scout/data/ (ignore par la regle data/ ci-dessus) ; outils/verifier_lecteur.py
+# se contente de dire que la capture de reference manque.
 __pycache__/

@@ -31,20 +31,21 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "moteur"))
 
 from gameui import GameWindow, find_game_window, is_game_focused  # noqa: E402
 from popup import find_popup, popup_ready, read_popup  # noqa: E402
 from store import SystemStore  # noqa: E402
 from systems import find_systems, safe_box  # noqa: E402
 
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = BASE_DIR / "config.json"
-DATA_DIR = BASE_DIR / "data"
-STATE_FILE = DATA_DIR / "crawl_state.json"
-LOG_FILE = DATA_DIR / "releve.txt"
-MAPS_DIR = DATA_DIR / "cartes"
-POPUPS_DIR = DATA_DIR / "a_traiter"
+import chemins  # noqa: E402
+
+CONFIG_FILE = chemins.CONFIG
+DATA_DIR = chemins.SCAN
+STATE_FILE = chemins.SCAN_ETAT
+LOG_FILE = chemins.SCAN_JOURNAL
+MAPS_DIR = chemins.CARTES
+POPUPS_DIR = chemins.A_TRAITER
 
 UNIVERSE_MAX = 1150
     # 1408

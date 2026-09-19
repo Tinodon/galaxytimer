@@ -26,7 +26,7 @@ TIMEOUT = 15
 
 def load_env() -> dict:
     """Lit le .env du projet sans dependance supplementaire."""
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     values = {}
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():

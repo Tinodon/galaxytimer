@@ -14,13 +14,13 @@ from pathlib import Path
 
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "moteur"))
 
 from match import level_growth_fits  # noqa: E402
 from names import best_match, looks_like_free_slot, similarity  # noqa: E402
 from popup import read_popup  # noqa: E402
 
-DEFAULT_SHOT = Path(__file__).resolve().parent / "captures" / "jeu_18-49-43.png"
+DEFAULT_SHOT = Path(__file__).resolve().parent.parent / "data" / "scan" / "ecrans_de_reference" / "jeu_18-49-43.png"
 
 # Ce que contient reellement ce systeme, verifie a l'oeil sur la capture.
 EXPECTED_COORDS = (688, 852)

@@ -25,7 +25,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "moteur"))
 
 from glyphs import align, compare, load_glyphs, normalise, text_band, upscale_mask  # noqa: E402
 from match import Roster  # noqa: E402
@@ -34,8 +34,9 @@ from popup import (  # noqa: E402
     read_hq_level, read_player_level,
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-DEBUG_DIR = BASE_DIR / "data" / "debug"
+import chemins  # noqa: E402
+
+DEBUG_DIR = chemins.DEBUG
 THRESHOLDS = (110, 140, 170, 200)
 SCALE = 6
 

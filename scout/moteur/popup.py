@@ -445,7 +445,7 @@ def main():
         raise SystemExit("usage: python scout/popup.py <image.png> [--debug]")
 
     image = Image.open(sys.argv[1])
-    debug = Path(__file__).parent / "debug" if "--debug" in sys.argv else None
+    debug = Path(__file__).resolve().parent.parent / "data" / "debug" if "--debug" in sys.argv else None
     result = read_popup(image, debug_dir=debug)
 
     if not result:

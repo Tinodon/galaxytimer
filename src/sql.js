@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SCHEMA_FILE = join(ROOT, 'scout', 'schema.sql');
+const SCHEMA_FILE = join(ROOT, 'scout', 'moteur', 'schema.sql');
 
 let pool = null;
 

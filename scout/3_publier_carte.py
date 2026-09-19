@@ -36,14 +36,15 @@ import time
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "moteur"))
 
 from db import load_env  # noqa: E402
 from upload import resolved_colonies  # noqa: E402
 
-BASE_DIR = Path(__file__).resolve().parent
-SCHEMA_FILE = BASE_DIR / "schema.sql"
-PLAYERS_FILE = BASE_DIR / "data" / "roster_joueurs.json"
+import chemins  # noqa: E402
+
+SCHEMA_FILE = chemins.SCHEMA_SQL
+PLAYERS_FILE = chemins.FICHES
 
 PINS_KEY = "galaxytimer:pins"
 

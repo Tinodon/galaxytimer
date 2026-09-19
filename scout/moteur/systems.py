@@ -229,7 +229,7 @@ def main():
     if "--all" in sys.argv or not args:
         # Sans argument, on traite tout le dossier : recopier un nom de fichier
         # horodate a la main est une source d'erreur inutile.
-        folder = Path(__file__).resolve().parent / "captures"
+        folder = Path(__file__).resolve().parent.parent / "data" / "scan" / "ecrans_de_reference"
         shots = sorted(
             p for p in folder.glob("jeu_*.png") if not p.stem.endswith("_cibles")
         )

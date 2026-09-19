@@ -32,8 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from db import load_env  # noqa: E402
 
-BASE_DIR = Path(__file__).resolve().parent
-RESOLVED_FILE = BASE_DIR / "data" / "systems_resolus.jsonl"
+import chemins  # noqa: E402
+
+RESOLVED_FILE = chemins.SYSTEMES_LUS
 
 # Cle par premiere lettre de la forme canonique du pseudo. Le bot n'a qu'un
 # morceau a charger pour repondre a une recherche.

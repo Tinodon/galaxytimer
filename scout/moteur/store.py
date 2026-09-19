@@ -25,8 +25,10 @@ import json
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-SYSTEMS_FILE = DATA_DIR / "systems.jsonl"
+import chemins  # noqa: E402
+
+DATA_DIR = chemins.RESULTATS
+SYSTEMS_FILE = chemins.SYSTEMES_BRUTS
 
 
 class SystemStore:

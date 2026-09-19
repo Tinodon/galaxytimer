@@ -247,7 +247,8 @@ def check():
         draw.line([x, y - 20, x, y + 20], fill=colour, width=1)
         draw.text((x + 20, y + 16), label, fill=colour)
 
-    out = Path(__file__).resolve().parent / "captures" / "_interface.png"
+    out = Path(__file__).resolve().parent.parent / "data" / "scan" / "ecrans_de_reference" / "_interface.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.parent.mkdir(exist_ok=True)
     image.save(out)
     print("Fenetre : {} ({}x{})".format(title, rect[2], rect[3]))
