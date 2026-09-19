@@ -16,8 +16,10 @@ Pour chaque capture de data/captures/1_a_traiter/ :
        3_a_verifier/  au moins un pseudo a regarder a la main. A cote de
                       l'image, une copie ..._ENTOURE.png ou les pseudos rates
                       sont entoures en rouge et les reconnus ecrits en vert ;
-  5. ecrit le resultat dans data/resultats/systems_resolus.jsonl, que lit
-     3_publier_carte.py, et une ligne lisible dans data/journaux/lecture.txt.
+  5. ecrit le resultat a trois endroits :
+       data/resultats/joueurs_trouves.txt  une ligne par joueur : "pseudo x,y"
+       data/resultats/systems_resolus.jsonl  le detail, pour 3_publier_carte.py
+       data/journaux/lecture.txt             le deroule capture par capture
 
 Rien n'est jamais supprime : les images sont DEPLACEES, pas effacees. Un pseudo
 douteux n'est jamais publie : il reste "a verifier". Mieux vaut une vignette a
@@ -219,8 +221,13 @@ def main():
     counts = {"validees": 0, "a_verifier": 0, "pseudos_ok": 0, "pseudos_a_voir": 0}
     journal = chemins.JOURNAUX / "lecture.txt"
 
+    # Le .jsonl porte tout le detail, mais il est illisible pour un humain.
+    # A cote, une liste toute simple : un joueur, ses coordonnees.
+    trouves = chemins.RESULTATS / "joueurs_trouves.txt"
+
     with ProcessPoolExecutor(max_workers=args.workers, initializer=_init_worker) as pool, \
             journal.open("a", encoding="utf-8") as log, \
+            trouves.open("a", encoding="utf-8") as simple, \
             chemins.SYSTEMES_LUS.open("a", encoding="utf-8") as results:
         futures = {pool.submit(read_one, str(s)): s for s in shots}
         for done, future in enumerate(as_completed(futures), start=1):
@@ -244,6 +251,11 @@ def main():
                 result["new_name"] = target.name
                 results.write(json.dumps(record(result), ensure_ascii=False) + "\n")
                 results.flush()
+                for tile in result["tiles"]:
+                    if tile["name"]:
+                        simple.write("{} {},{}\n".format(
+                            tile["name"], result["coords"][0], result["coords"][1]))
+                simple.flush()
                 if failed:
                     annotate(source, target.with_name(target.stem + "__ENTOURE.png"), result["tiles"])
                 source.rename(target)
@@ -278,8 +290,13 @@ def main():
     if (Path(__file__).resolve().parent / "3_publier_carte.py").exists():
         print("\nPour mettre la carte du bot a jour : python 3_publier_carte.py")
     else:
-        print("\nQuand tu as fini, envoie le dossier data/captures et le fichier")
-        print("data/resultats/systems_resolus.jsonl (voir LISEZMOI.md).")
+        # Le dossier a_partager est lu par quelqu'un qui ne parle pas francais.
+        print("\nDone. Your results are in:")
+        print("  data/resultats/joueurs_trouves.txt   one player and their coordinates per line")
+        print("  data/captures/2_validees             photos fully read")
+        print("  data/captures/3_a_verifier           photos with a name left to check")
+        print("When you are finished, send the data/captures and data/resultats")
+        print("folders to Noe (see README.md, step 7).")
 
 
 if __name__ == "__main__":

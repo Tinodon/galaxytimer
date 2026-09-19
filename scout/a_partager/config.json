@@ -2,7 +2,7 @@
   "_comment": "Reglages du balayage. Modifiables sans toucher au code.",
   "origin": [
     0,
-    0
+    700
   ],
   "_origin": "Point de depart. Les coordonnees du jeu ne descendent pas sous zero, donc (0,0) est le coin de l'univers. Parcours ligne par ligne, jamais de retour en arriere.",
   "timing": {
@@ -25,7 +25,7 @@
   "zone": {
     "x_min": 0,
     "x_max": 1408,
-    "y_min": 0,
+    "y_min": 700,
     "y_max": 1408
   },
   "_zone": "Bande de carte a scanner. A deux, donnez-vous des bandes de Y differentes (ex. 0-700 et 700-1408) pour ne pas scanner deux fois les memes galaxies."
