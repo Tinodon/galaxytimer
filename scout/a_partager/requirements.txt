@@ -1,0 +1,6 @@
+mss
+keyboard
+numpy
+pillow
+pytesseract
+requests
