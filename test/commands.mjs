@@ -240,7 +240,8 @@ async function checkMap() {
 
   // Chaque /pin ajoute une planete, meme sur une case deja connue (regle de Noe).
   const pin = keep(await run('pin', { player: 'Myra 512,340 5' }));
-  report('/pin ajoute une planete avec son QG', /\*\*1\*\* planet\(s\) added/.test(pin), pin);
+  report('/pin ajoute une planete avec son QG',
+    /\*\*Myra\*\* \+1/.test(pin) && pin.includes('`512,340`') && /HQ|starbase/.test(pin), pin);
   keep(await run('pin', { player: 'Myra 512,340' }));
   report('/pin sur la meme case ajoute une 2e planete',
     (await visibles(512, 340)).map((r) => `${r.numero}:${r.qg ?? '-'}`).join(' ') === '1:5 2:-',
@@ -339,6 +340,70 @@ async function checkMap() {
   const pinNul = await run('pin', { player: 'Myra nawak' });
   report('/pin refuse une saisie illisible', /not a coordinate|No coordinates/i.test(String(pinNul)),
     String(pinNul).slice(0, 90));
+
+
+  // --- Plusieurs joueurs d'un coup, et le filtre de guerre ---
+  const luMulti = (text) => {
+    const r = pins.parseMultiPin(text);
+    return r.error ? 'erreur' : r.players.map(
+      (p) => `${p.name}:${p.entries.map((e) => `${e.x},${e.y}/${e.hq ?? '-'}`).join('+')}`).join(' ');
+  };
+  for (const [saisie, attendu] of [
+    ['Myra 336,7 5 HansWorsdt 340,8', 'Myra:336,7/5 HansWorsdt:340,8/-'],
+    ['Myra 336,7 5 338,10 4', 'Myra:336,7/5+338,10/4'],
+    ['336,7 Myra', 'erreur'],
+    ['Myra', 'erreur'],
+  ]) {
+    report(`/pin lit "${saisie}"`, luMulti(saisie) === attendu, `${luMulti(saisie)} au lieu de ${attendu}`);
+  }
+
+  const luGalaxie = (text) => {
+    const r = pins.parseGalaxyPin(text);
+    return r.error ? 'erreur' : `${r.coords.x},${r.coords.y}|${r.players.map(
+      (p) => `${p.name}:${p.hq ?? '-'}`).join(' ')}`;
+  };
+  for (const [saisie, attendu] of [
+    ['359,11 Myra 5 HansWorsdt 7', '359,11|Myra:5 HansWorsdt:7'],
+    ['359,11 Myra HansWorsdt', '359,11|Myra:- HansWorsdt:-'],
+    ['Myra 5', 'erreur'],
+    ['359,11', 'erreur'],
+  ]) {
+    report(`/pingl lit "${saisie}"`, luGalaxie(saisie) === attendu, `${luGalaxie(saisie)} au lieu de ${attendu}`);
+  }
+
+  // Deux joueurs enregistres par une seule commande.
+  const multi = keep(await run('pin', { player: 'Myra 700,700 6 HansWorsdt 701,701 6' }));
+  report('/pin enregistre plusieurs joueurs a la fois',
+    /Myra/.test(multi) && /HansWorsdt/.test(multi)
+    && (await visibles(700, 700)).length === 1, multi.slice(0, 160));
+  const inconnu = keep(await run('pin', { player: 'zzznexistepas 702,702 Myra 703,703' }));
+  report('/pin signale un pseudo introuvable sans perdre les autres',
+    /no such player/i.test(inconnu) && (await visibles(703, 703)).length === 1, inconnu.slice(0, 160));
+
+  // Une galaxie, ses habitants a la suite.
+  const galaxie = keep(await run('pingl', { galaxy: '704,704 Myra 6 HansWorsdt 5' }));
+  report('/pingl enregistre une galaxie entiere',
+    /Myra/.test(galaxie) && /HansWorsdt/.test(galaxie)
+    && (await visibles(704, 704))[0]?.qg === 6, galaxie.slice(0, 160));
+  const trop = await run('pingl', { galaxy: '705,705 a b c d e f g h i j k l m' });
+  report('/pingl refuse plus de 12 joueurs', /12 planets at most/i.test(String(trop)),
+    String(trop).slice(0, 80));
+
+  // Le filtre de guerre : ne voir que les bases d'un niveau donne.
+  const guerre = keep(await run('map', { alliance: 'folk valley 6' }));
+  // Chaque coordonnee affichee doit porter son QG 6, et aucune autre : c'est
+  // toute l'utilite du filtre en guerre.
+  const basesVues = guerre.match(/`\d+,\d+`[^`\n]*/g) ?? [];
+  report('/map <alliance> <QG> ne montre que ce niveau',
+    /Myra/.test(guerre) && guerre.includes('700,700') && !guerre.includes('512,340')
+    && basesVues.length === 3 && basesVues.every((c) => /6$/.test(c.trim())),
+    JSON.stringify(guerre));
+  const guerreVide = keep(await run('map', { alliance: 'folk valley 9' }));
+  report('/map dit quand aucune base n\'est a ce niveau',
+    /no known base/i.test(guerreVide), guerreVide.slice(0, 120));
+  const sansFiltre = keep(await run('map', { alliance: 'folk valley' }));
+  report('/map sans niveau montre toujours tout',
+    sansFiltre.includes('349,5') && sansFiltre.includes('700,700'), sansFiltre.slice(0, 120));
 
   const bad = outputs.filter((text) => FORBIDDEN.test(text));
   report('aucune reponse de carte n\'affiche "HQ ?", NaN, null ou undefined', !bad.length,

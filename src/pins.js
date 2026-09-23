@@ -118,6 +118,89 @@ export function parsePinInput(input) {
 }
 
 /**
+ * Lit "/pin Myra 336,7 5 Hans 340,8" : PLUSIEURS joueurs en une commande.
+ *
+ * Un mot qui n'est ni une coordonnee ni un chiffre ouvre un nouveau joueur ;
+ * ses coordonnees suivent, chacune avec son QG facultatif. C'est la forme
+ * demandee par les joueurs : relever une galerie entiere prenait autant de
+ * commandes que de joueurs.
+ *
+ * @returns {{ players: [{name, entries: [{x, y, hq}]}], error }}
+ */
+export function parseMultiPin(input) {
+  const tokens = tokenize(input);
+  const example = '`/pin Myra 336,7 5 Hans 340,8`';
+  const players = [];
+  const current = () => players[players.length - 1];
+
+  for (const token of tokens) {
+    if (COORD.test(token)) {
+      if (!current()) return { players: [], error: `Start with a player, e.g. ${example}.` };
+      const coord = toCoord(token);
+      if (coord.error) return { players: [], error: coord.error };
+      current().entries.push({ ...coord, hq: null });
+      continue;
+    }
+
+    const last = current()?.entries.at(-1);
+    if (NUMBER.test(token) && last && last.hq === null) {
+      const hq = toHq(token);
+      if (hq.error) return { players: [], error: hq.error };
+      last.hq = hq.hq;
+      continue;
+    }
+
+    // Ni coordonnee ni QG : c'est un pseudo. S'il suit un pseudo sans
+    // coordonnees, c'est la suite du meme nom ("Mr Big 336,7").
+    if (current() && !current().entries.length) current().name += ` ${token}`;
+    else players.push({ name: token, entries: [] });
+  }
+
+  if (!players.length) return { players: [], error: `Write the player, then the coordinates, e.g. ${example}.` };
+  const empty = players.find((p) => !p.entries.length);
+  if (empty) return { players: [], error: `No coordinates for \`${empty.name}\`. Write it like ${example}.` };
+  return { players, error: null };
+}
+
+/**
+ * Lit "/pingl 359,11 Myra 5 Hans 7" : UNE galaxie, plusieurs joueurs.
+ *
+ * L'autre sens de saisie : on a le popup d'un systeme sous les yeux et on
+ * recopie ses habitants. Le chiffre qui suit un pseudo est son QG.
+ *
+ * @returns {{ coords: {x, y}, players: [{name, hq}], error }}
+ */
+export function parseGalaxyPin(input) {
+  const tokens = tokenize(input);
+  const example = '`/pingl 359,11 Myra 5 Hans 7`';
+  if (!tokens.length || !COORD.test(tokens[0])) {
+    return { coords: null, players: [], error: `Start with the coordinates, e.g. ${example}.` };
+  }
+  const coord = toCoord(tokens[0]);
+  if (coord.error) return { coords: null, players: [], error: coord.error };
+
+  const players = [];
+  for (const token of tokens.slice(1)) {
+    if (COORD.test(token)) {
+      return { coords: null, players: [], error: `${example} is for ONE galaxy. For several, use \`/pin\`.` };
+    }
+    const last = players[players.length - 1];
+    if (NUMBER.test(token) && last && last.hq === null) {
+      const hq = toHq(token);
+      if (hq.error) return { coords: null, players: [], error: hq.error };
+      last.hq = hq.hq;
+      continue;
+    }
+    players.push({ name: token, hq: null });
+  }
+
+  if (!players.length) {
+    return { coords: null, players: [], error: `Name at least one player, e.g. ${example}.` };
+  }
+  return { coords: coord, players, error: null };
+}
+
+/**
  * Lit "/edit Myra 3 336,7 5" : le pseudo, le numero de ligne de /find, puis
  * ce qui change.
  *

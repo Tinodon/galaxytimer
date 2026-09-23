@@ -97,13 +97,22 @@ export const definitions = [
 
   new SlashCommandBuilder()
     .setName('pin')
-    .setDescription('Add a planet you saw in game: /pin Myra 336,7 5 (5 = HQ level)')
+    .setDescription('Add planets: /pin Myra 336,7 5 Hans 340,8 (5 = HQ level)')
     // UN seul champ, rempli d'une traite : "Myra 336,7 5". Deux champs
     // obligeaient a cliquer de l'un a l'autre, ce que Noe trouvait lent.
     // Chaque /pin ajoute une planete, meme sur une case deja connue.
     .addStringOption((o) =>
       o.setName('player')
-        .setDescription('Player, coordinates, HQ level if known — e.g. Myra 336,7 5')
+        .setDescription('Player, coords, HQ — several players in a row: Myra 336,7 5 Hans 340,8')
+        .setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('pingl')
+    .setDescription('One galaxy, several players: /pingl 359,11 Myra 5 Hans 7')
+    .addStringOption((o) =>
+      o.setName('galaxy')
+        .setDescription('Coordinates, then each player and their HQ — e.g. 359,11 Myra 5 Hans 7')
         .setRequired(true))
     .toJSON(),
 
@@ -125,9 +134,11 @@ export const definitions = [
 
   new SlashCommandBuilder()
     .setName('map')
-    .setDescription('Known colonies of every member of an alliance')
+    .setDescription('Colonies of an alliance: /map folk valley, or /map folk valley 5')
     .addStringOption((o) =>
-      o.setName('alliance').setDescription('Alliance name').setRequired(true))
+      o.setName('alliance')
+        .setDescription('Alliance name, and an HQ level to see only those bases')
+        .setRequired(true))
     .toJSON(),
 
   new SlashCommandBuilder()
@@ -409,37 +420,63 @@ const playerRecord = (user) => ({
   planets: user.Planets?.length ?? 0,
 });
 
+/** Enregistre les planetes d'UN joueur et rend la ligne a afficher. */
+async function pinOnePlayer(interaction, name, entries) {
+  const user = await api.getUserByName(name).catch(() => null);
+  if (!user) return { line: `\`${name}\` — no such player, nothing recorded.`, ok: false };
+
+  const owned = user.Planets?.length ?? 0;
+  const result = await map.pin(playerRecord(user), entries, displayNameOf(interaction));
+  const warning = result.total > (owned || map.MAX_COLONIES)
+    ? `  ⚠️ more than the **${owned}** they own — fix it with \`/edit ${user.Name} <line> delete\``
+    : '';
+  return {
+    ok: true,
+    line: `**${user.Name}** +${result.added} → ${entries.map((e) => spotLine(e)).join(' ')}`
+      + `  (${result.total}/${owned} known)${warning}`,
+  };
+}
+
 async function handlePin(interaction) {
   await interaction.deferReply();
-  const { name, entries, error } = pins.parsePinInput(interaction.options.getString('player'));
+  const { players, error } = pins.parseMultiPin(interaction.options.getString('player'));
   if (error) {
     await interaction.editReply(error);
     return;
   }
   if (!(await requireMap(interaction))) return;
 
-  // On resout le joueur via l'API : la planete est ainsi rattachee a un id
-  // stable, meme si la personne change de pseudo.
-  const user = await api.getUserByName(name).catch(() => null);
-  if (!user) {
-    await interaction.editReply(`No player found for \`${name}\`.`);
+  // Un joueur par ligne : une galaxie entiere se releve en une commande, et
+  // un pseudo introuvable n'empeche pas d'enregistrer les autres.
+  const lines = [];
+  for (const player of players) {
+    const { line } = await pinOnePlayer(interaction, player.name, player.entries);
+    lines.push(line);
+  }
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
+}
+
+/** /pingl : une seule galaxie, autant de joueurs qu'elle en contient. */
+async function handleGalaxyPin(interaction) {
+  await interaction.deferReply();
+  const { coords, players, error } = pins.parseGalaxyPin(interaction.options.getString('galaxy'));
+  if (error) {
+    await interaction.editReply(error);
+    return;
+  }
+  if (!(await requireMap(interaction))) return;
+  if (players.length > map.MAX_COLONIES) {
+    await interaction.editReply(
+      `A galaxy holds ${map.MAX_COLONIES} planets at most, you gave ${players.length}.`);
     return;
   }
 
-  const owned = user.Planets?.length ?? 0;
-  const result = await map.pin(playerRecord(user), entries, displayNameOf(interaction));
-
-  const lines = [
-    `**${user.Name}** — **${result.added}** planet(s) added: ${entries.map((e) => spotLine(e)).join(' ')}`,
-    `${result.total} planet(s) recorded out of **${owned}** they own. ` +
-      `\`/find ${user.Name}\` numbers them for \`/edit\`.`,
-  ];
-  // Plus de planetes que le joueur n'en possede : l'une d'elles est fausse.
-  if (result.total > (owned || map.MAX_COLONIES)) {
-    lines.push(`⚠️ That is more than they own — fix the wrong one with \`/edit ${user.Name} <line> delete\`.`);
+  const lines = [`**${coords.x},${coords.y}** — ${players.length} player(s)`];
+  for (const player of players) {
+    const { line } = await pinOnePlayer(interaction, player.name, [{ ...coords, hq: player.hq }]);
+    lines.push(line);
   }
-
-  await interaction.editReply({ content: lines.join('\n'), allowedMentions: NO_PING });
+  await interaction.editReply({ content: fit(lines.join('\n')), allowedMentions: NO_PING });
 }
 
 /** /edit : corrige une ligne de /find, designee par son numero. */
@@ -523,7 +560,14 @@ async function handleFind(interaction) {
 
 async function handleMap(interaction) {
   await interaction.deferReply();
-  const name = interaction.options.getString('alliance');
+  // "folk valley 5" : le dernier mot, s'il est un niveau de QG, filtre les
+  // bases. En guerre on n'attaque que des bases de son propre niveau, donc
+  // lister tout le reste fait perdre du temps. Le nom d'alliance peut contenir
+  // des chiffres ("Squad 51"), mais jamais un mot qui ne soit QUE 1 a 9.
+  const raw = (interaction.options.getString('alliance') ?? '').trim();
+  const match = raw.match(/^(.*\S)\s+([1-9])$/);
+  const name = match ? match[1] : raw;
+  const onlyHq = match ? Number(match[2]) : null;
 
   const alliance = await api.getAlliance(name).catch(() => null);
   if (!alliance) {
@@ -542,7 +586,8 @@ async function handleMap(interaction) {
   let mapped = 0;
 
   for (const member of members) {
-    const spots = colonies.get(Number(member.Id)) ?? [];
+    let spots = colonies.get(Number(member.Id)) ?? [];
+    if (onlyHq !== null) spots = spots.filter((spot) => spot.hq === onlyHq);
     if (!spots.length) continue;
 
     mapped += spots.length;
@@ -552,17 +597,20 @@ async function handleMap(interaction) {
   }
 
   if (!rows.length) {
-    await interaction.editReply(
-      `**${alliance.Name}** — ${members.length} members, none of them mapped yet.
-` +
-      'They may sit outside the scanned area, or their names were unreadable.',
-    );
+    await interaction.editReply(onlyHq !== null
+      ? `**${alliance.Name}** — no known base at ${hqLabel(onlyHq)} among ${members.length} members.
+`
+        + 'Either they have none, or their HQ levels are not read yet (a scanned base often has no level).'
+      : `**${alliance.Name}** — ${members.length} members, none of them mapped yet.
+`
+        + 'They may sit outside the scanned area, or their names were unreadable.');
     return;
   }
 
   await interaction.editReply({
     content: fit([
-      `**${alliance.Name}** — ${mapped} colonies across ${rows.length}/${members.length} member(s)`,
+      `**${alliance.Name}** — ${mapped} ${onlyHq !== null ? hqLabel(onlyHq) + ' ' : ''}`
+      + `colonies across ${rows.length}/${members.length} member(s)`,
       alliance.InWar ? `**AT WAR** against ${alliance.OpponentAllianceId}` : '',
       '',
       ...rows,
@@ -747,6 +795,7 @@ export async function handleCommand(interaction) {
   if (interaction.commandName === 'scout') return handleScout(interaction);
   if (interaction.commandName === 'alliance') return handleAlliance(interaction);
   if (interaction.commandName === 'pin') return handlePin(interaction);
+  if (interaction.commandName === 'pingl') return handleGalaxyPin(interaction);
   if (interaction.commandName === 'find') return handleFind(interaction);
   if (interaction.commandName === 'map') return handleMap(interaction);
   if (interaction.commandName === 'who') return handleWho(interaction);
